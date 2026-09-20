@@ -1,103 +1,45 @@
-# BiblioTech - Gestionnaire de Bibliothèque Numérique (MVP)
+# BiblioTech - Digital Library Manager (MVP)
 
-BiblioTech est une application web légère et intuitive conçue en PHP et Tailwind CSS pour gérer, organiser et consulter une bibliothèque numérique (PDF, EPUB, MOBI).
-
----
-
-## 🌟 Fonctionnalités Principales
-
-- **Recherche Automatique via ISBN (100% PHP/Server-Side)** :
-  - Interroge automatiquement **Google Books API** et **Open Library API** directement depuis le serveur PHP.
-  - Remplit automatiquement le titre, l'auteur, l'éditeur, l'année de publication, le nombre de pages et le résumé.
-  - Contourne l'ensemble des blocages CORS et restrictions réseau du navigateur client.
-- **Gestion Complète des Ouvrages (CRUD)** :
-  - Ajout, modification, suppression et téléchargement de documents numériques.
-  - Stockage sécurisé des fichiers joints (`PDF`, `EPUB`, `MOBI`).
-- **Visionneuse Intégrée Multi-format** :
-  - **PDF** : Intégration native dans le navigateur.
-  - **EPUB** : Liseuse interactive intégrée alimentée par `ePUB.js` (navigation page par page).
-  - **MOBI** : Détection et lien direct de téléchargement.
-- **Interface Moderne & Ergonomique** :
-  - Panneau latéral rétractable/collapsible.
-  - Statistiques en temps réel (nombre total de livres, répartition par format).
-  - Mode plein écran pour la lecture d'ouvrages.
-- **Moteur de Recherche & Filtres** :
-  - Recherche globale par titre, auteur, ISBN ou cote de classement.
-  - Filtrage combiné par format (`PDF`, `EPUB`, `MOBI`) et par catégorie.
-  - Pagination dynamique.
+BiblioTech is a lightweight, intuitive monolithic web application built with PHP and Tailwind CSS to manage, organize, and read digital books in PDF, EPUB, and MOBI formats.
 
 ---
 
-## 🛠️ Stack Technique
+## 🌟 Key Features
 
-- **Backend** : PHP 7.4+ (PDO MySQL, Stream Context / cURL)
-- **Base de Données** : MySQL / MariaDB (auto-création de la table à l'initialisation)
-- **Frontend** : HTML5, JavaScript (ES6+), Tailwind CSS (CDN), FontAwesome 6
-- **Bibliothèques JS externes** :
-  - [ePUB.js](https://github.com/futurepress/epub.js/) (Lecture native EPUB)
-  - JSZip (Prérequis pour ePUB.js)
+- **Automatic ISBN Data Fetching (Internal API & AJAX)**:
+  - Dedicated PHP endpoint (`?ajax_isbn=...`) querying **Google Books API** (primary) with an automatic fallback to **Open Library API**.
+  - Dynamically fetches and populates book details: title, author(s), publisher, publication year, page count, and summary.
+  - Bypass browser CORS restrictions and network limitations seamlessly via server-side requests.
+- **Complete Book Management (CRUD)**:
+  - Add, edit, delete, and download digital documents.
+  - Secure file upload handling: extension validation (`.pdf`, `.epub`, `.mobi`) and unique MD5 hashing for file storage.
+  - Automatic physical file cleanup upon book deletion or file replacement.
+- **Integrated Multi-Format Reader & Viewer**:
+  - In-browser modal viewer interface for direct previewing and reading of stored digital books.
+- **Modern & Responsive UI (Tailwind CSS & FontAwesome)**:
+  - Retractable/collapsible sidebar for adding and editing entries.
+  - Real-time header dashboard displaying catalog statistics (total book count and format breakdown for PDF, EPUB, MOBI).
+- **Search Engine, Filtering & Pagination**:
+  - Global search combining title, author, ISBN, and library shelf mark (cote).
+  - Combined filters by format (`PDF`, `EPUB`, `MOBI`) and category.
+  - Dynamic pagination set to 15 records per page.
 
 ---
 
-## 📁 Structure du Projet
+## 🛠️ Tech Stack
+
+- **Backend**: PHP 7.4+ (PDO MySQL, Stream Context, Internal JSON API)
+- **Database**: MySQL / MariaDB (auto-creates the `livres` table upon initial run)
+- **Frontend**: HTML5, JavaScript ES6 (Fetch API, DOM manipulation), Tailwind CSS (CDN), FontAwesome 6
+- **Storage**: Local filesystem (`uploads/books/`) with automatic directory initialization
+
+---
+
+## 📁 Directory Structure
 
 ```text
 .
-├── index.php           # Application monolithique (Backend API + Frontend UI)
-├── README.md           # Documentation du projet
+├── index.php           # Monolithic Application (AJAX API, PHP Controller, Frontend UI)
+├── README.md           # Project Documentation
 └── uploads/
-    └── books/          # Dossier de stockage automatique des fichiers importés
-```
-
----
-
-## 🚀 Installation & Configuration
-
-### 1. Prérequis
-- Un serveur web local ou distant (XAMPP, WampServer, MAMP, Docker, ou CLI PHP).
-- PHP version **7.4** ou supérieure.
-- Un serveur de base de données **MySQL / MariaDB**.
-
-### 2. Configuration de la base de données
-Par défaut, le fichier `index.php` pointe vers une configuration locale standard. Vous pouvez modifier les identifiants au début du fichier `index.php` si nécessaire :
-
-```php
-$host = 'localhost';
-$db   = 'bibliotheque_db';
-$user = 'root';
-$pass = '';
-```
-
-> **Note** : La base de données `bibliotheque_db` doit être créée au préalable (ex: via `CREATE DATABASE bibliotheque_db;`). La table `livres` sera quant à elle créée automatiquement lors du premier chargement de la page.
-
-### 3. Démarrage rapide (PHP Built-in Server)
-
-```bash
-# Se placer dans le répertoire du projet
-cd bibliotech
-
-# Démarrer le serveur de développement PHP
-php -S localhost:8000
-```
-
-Ouvrez votre navigateur à l'adresse : `http://localhost:8000`
-
----
-
-## 📖 Utilisation
-
-1. **Ajouter un ouvrage via ISBN** :
-   - Entrez un code ISBN à 10 ou 13 chiffres (ex: `9782070619177`).
-   - Cliquez sur **"Remplir via ISBN"**.
-   - Le serveur récupère automatiquement les détails du livre.
-   - Joignez le fichier numérique correspondant (`.pdf`, `.epub`, ou `.mobi`) et validez.
-
-2. **Lire / Prévisualiser un livre** :
-   - Cliquez sur l'icône **Œil** ($\mathcal{O}$) dans la liste des ouvrages.
-   - Les fichiers PDF et EPUB s'ouvriront directement dans la liseuse modale.
-
----
-
-## 📄 Licence
-
-Projet open-source distribué sous la licence [MIT](LICENSE).
+    └── books/          # Secure directory for uploaded book files
