@@ -181,7 +181,7 @@ if ($page < 1) $page = 1;
 if ($page > $totalPages) $page = $totalPages;
 $offset = ($page - 1) * $perPage;
 
-// Requête paginée sécurisée avec LIMIT et OFFSET
+// Requête paginée sécurisée
 $query = "SELECT * FROM livres WHERE $whereSql ORDER BY id DESC LIMIT $perPage OFFSET $offset";
 $stmt = $pdo->prepare($query);
 $stmt->execute($params);
@@ -210,11 +210,14 @@ if (isset($_GET['edit'])) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bibliothèque Numérique - MVP</title>
+    <title>Bibliothèque Numérique - BiblioTech</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- FontAwesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- EPUB.js CDN pour lecture intégrée -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.5/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
     <style>
         #sidebar {
             transition: margin-left 0.3s ease-in-out, width 0.3s ease-in-out, opacity 0.3s ease-in-out;
@@ -454,7 +457,7 @@ if (isset($_GET['edit'])) {
                                             <?= htmlspecialchars($l['isbn'] ?: '-') ?>
                                         </td>
                                         <td class="p-3 text-right space-x-2 whitespace-nowrap">
-                                            <button onclick="openPreview('<?= htmlspecialchars($l['fichier']) ?>', '<?= htmlspecialchars(addslashes($l['titre'])) ?>', '<?= $l['format'] ?>')" class="text-gray-500 hover:text-indigo-600 transition" title="Prévisualiser">
+                                            <button onclick="openPreview('<?= htmlspecialchars($l['fichier']) ?>', '<?= htmlspecialchars(addslashes($l['titre'])) ?>', '<?= $l['format'] ?>')" class="text-gray-500 hover:text-indigo-600 transition" title="Prévisualiser / Lire">
                                                 <i class="fa-solid fa-eye text-sm"></i>
                                             </button>
                                             <a href="<?= htmlspecialchars($l['fichier']) ?>" download class="text-gray-500 hover:text-emerald-600 transition" title="Télécharger">
@@ -524,22 +527,39 @@ if (isset($_GET['edit'])) {
         </main>
     </div>
 
-    <!-- Modale de Prévisualisation -->
+    <!-- Modale de Prévisualisation / Lecture (PDF & EPUB Intégré) -->
     <div id="previewModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
         <div class="bg-white rounded-xl shadow-2xl w-full max-w-4xl h-[85vh] flex flex-col overflow-hidden">
-            <div class="p-4 border-b border-gray-200 flex items-center justify-between bg-gray-50">
-                <h3 id="modalTitle" class="font-semibold text-gray-800 text-sm">Prévisualisation de l'ouvrage</h3>
+            <div class="p-4 border-b border-gray-200 flex items-center justify-between bg-gray-50 shrink-0">
+                <div class="flex items-center space-x-4">
+                    <h3 id="modalTitle" class="font-semibold text-gray-800 text-sm">Lecture de l'ouvrage</h3>
+                    <!-- Contrôles spécifiques EPUB (Page précédente / suivante) -->
+                    <div id="epubControls" class="hidden items-center space-x-1">
+                        <button onclick="prevEpubPage()" class="px-2 py-1 bg-white border border-gray-300 rounded text-xs hover:bg-gray-100 text-gray-700 shadow-sm" title="Page précédente"><i class="fa-solid fa-chevron-left"></i> Précédent</button>
+                        <button onclick="nextEpubPage()" class="px-2 py-1 bg-white border border-gray-300 rounded text-xs hover:bg-gray-100 text-gray-700 shadow-sm" title="Page suivante">Suivant <i class="fa-solid fa-chevron-right"></i></button>
+                    </div>
+                </div>
                 <div class="flex items-center space-x-2">
                     <button onclick="toggleModalFullscreen()" class="text-gray-400 hover:text-gray-700 text-xs px-2 py-1 rounded bg-gray-200/50" title="Plein écran"><i class="fa-solid fa-expand"></i></button>
                     <button onclick="closePreview()" class="text-gray-400 hover:text-red-600 font-bold px-2 py-1"><i class="fa-solid fa-xmark text-lg"></i></button>
                 </div>
             </div>
+            
+            <!-- Conteneurs de visionneuse -->
             <div class="flex-1 bg-gray-100 relative flex items-center justify-center overflow-hidden" id="modalBodyContainer">
-                <iframe id="previewIframe" src="" class="w-full h-full border-0"></iframe>
+                <!-- Lecteur PDF -->
+                <iframe id="previewIframe" src="" class="w-full h-full border-0 hidden"></iframe>
+                
+                <!-- Lecteur EPUB Intégré (Epub.js) -->
+                <div id="epubViewerContainer" class="w-full h-full hidden flex items-center justify-center bg-white p-4">
+                    <div id="viewer" class="w-full h-full max-w-2xl"></div>
+                </div>
+
+                <!-- Fallback pour MOBI ou formats non pris en charge en ligne -->
                 <div id="epubFallback" class="hidden absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-white">
                     <div class="text-indigo-600 text-4xl mb-3"><i class="fa-solid fa-book"></i></div>
-                    <h4 class="font-semibold text-gray-800 mb-1">Format EPUB / MOBI</h4>
-                    <p class="text-xs text-gray-500 mb-4 max-w-sm">La prévisualisation directe en ligne est optimisée pour les PDF. Vous pouvez télécharger ce fichier pour le lire sur votre application dédiée.</p>
+                    <h4 class="font-semibold text-gray-800 mb-1">Format MOBI</h4>
+                    <p class="text-xs text-gray-500 mb-4 max-w-sm">La lecture en ligne directe est disponible pour les PDF et EPUB. Pour ce format MOBI, veuillez télécharger le fichier.</p>
                     <a id="fallbackDownloadBtn" href="#" download class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-xs font-medium shadow-sm hover:bg-indigo-700">Télécharger le livre</a>
                 </div>
             </div>
@@ -564,30 +584,73 @@ if (isset($_GET['edit'])) {
             }
         }
 
+        // Gestion de la Modale et des Lecteurs
         const previewModal = document.getElementById('previewModal');
         const previewIframe = document.getElementById('previewIframe');
-        const modalTitle = document.getElementById('modalTitle');
+        const epubViewerContainer = document.getElementById('epubViewerContainer');
         const epubFallback = document.getElementById('epubFallback');
+        const epubControls = document.getElementById('epubControls');
+        const modalTitle = document.getElementById('modalTitle');
         const fallbackDownloadBtn = document.getElementById('fallbackDownloadBtn');
 
+        let currentBook = null;
+        let currentRendition = null;
+
         function openPreview(filePath, title, format) {
-            modalTitle.textContent = "Prévisualisation : " + title;
+            modalTitle.textContent = "Lecture : " + title;
             previewModal.classList.remove('hidden');
             
-            if (format.toUpperCase() === 'PDF') {
-                previewIframe.style.display = 'block';
-                epubFallback.classList.add('hidden');
+            // Réinitialiser les affichages
+            previewIframe.classList.add('hidden');
+            epubViewerContainer.classList.add('hidden');
+            epubFallback.classList.add('hidden');
+            epubControls.classList.add('hidden');
+
+            const fmt = format.toUpperCase();
+
+            if (fmt === 'PDF') {
+                previewIframe.classList.remove('hidden');
                 previewIframe.src = filePath;
+            } else if (fmt === 'EPUB') {
+                epubViewerContainer.classList.remove('hidden');
+                epubControls.classList.remove('hidden');
+                
+                // Nettoyer l'instance précédente si elle existe
+                document.getElementById('viewer').innerHTML = '';
+
+                // Charger et rendre l'EPUB via Epub.js
+                currentBook = ePub(filePath);
+                currentRendition = currentBook.renderTo("viewer", {
+                    width: "100%",
+                    height: "100%",
+                    spread: "auto"
+                });
+                currentRendition.display();
             } else {
-                previewIframe.style.display = 'none';
+                // Fallback (MOBI, etc.)
                 epubFallback.classList.remove('hidden');
                 fallbackDownloadBtn.href = filePath;
+            }
+        }
+
+        function prevEpubPage() {
+            if (currentRendition) {
+                currentRendition.prev();
+            }
+        }
+
+        function nextEpubPage() {
+            if (currentRendition) {
+                currentRendition.next();
             }
         }
 
         function closePreview() {
             previewModal.classList.add('hidden');
             previewIframe.src = '';
+            document.getElementById('viewer').innerHTML = '';
+            currentBook = null;
+            currentRendition = null;
         }
 
         function toggleModalFullscreen() {
