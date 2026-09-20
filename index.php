@@ -1,5 +1,89 @@
 <?php
 // ==========================================
+// API INTERNE DE RECHERCHE ISBN (AJAX PHP)
+// ==========================================
+if (isset($_GET['ajax_isbn'])) {
+    header('Content-Type: application/json');
+    $isbn = preg_replace('/[^0-9X]/i', '', $_GET['ajax_isbn']);
+    
+    if (empty($isbn)) {
+        echo json_encode(['success' => false, 'error' => 'ISBN invalide']);
+        exit;
+    }
+
+    $bookData = null;
+
+    // 1. Tentative Google Books (via file_get_contents en PHP)
+    $gBooksUrl = "https://www.googleapis.com/books/v1/volumes?q=isbn:" . urlencode($isbn);
+    $context = stream_context_create(['http' => ['method' => 'GET', 'header' => "User-Agent: Mozilla/5.0\r\n"]]);
+    $response = @file_get_contents($gBooksUrl, false, $context);
+    
+    if ($response) {
+        $data = json_decode($response, true);
+        if (!empty($data['items'])) {
+            $info = $data['items'][0]['volumeInfo'];
+            $bookData = [
+                'titre' => $info['title'] ?? '',
+                'auteur' => isset($info['authors']) ? implode(', ', $info['authors']) : '',
+                'editeur' => $info['publisher'] ?? '',
+                'annee' => isset($info['publishedDate']) ? substr($info['publishedDate'], 0, 4) : '',
+                'pages' => $info['pageCount'] ?? '',
+                'resume' => strip_tags($info['description'] ?? '')
+            ];
+        }
+    }
+
+    // 2. Si Google Books échoue, tentative Open Library direct par ISBN
+    if (!$bookData) {
+        $olUrl = "https://openlibrary.org/isbn/" . urlencode($isbn) . ".json";
+        $responseOL = @file_get_contents($olUrl, false, $context);
+        
+        if ($responseOL) {
+            $dataOL = json_decode($responseOL, true);
+            $title = $dataOL['title'] ?? '';
+            $publishDate = $dataOL['publish_date'] ?? '';
+            $numberPages = $dataOL['number_of_pages'] ?? '';
+            
+            // Récupération des auteurs Open Library (qui sont des clés de références)
+            $authorsArr = [];
+            if (!empty($dataOL['authors'])) {
+                foreach ($dataOL['authors'] as $authRef) {
+                    if (isset($authRef['key'])) {
+                        $authUrl = "https://openlibrary.org" . $authRef['key'] . ".json";
+                        $respAuth = @file_get_contents($authUrl, false, $context);
+                        if ($respAuth) {
+                            $authData = json_decode($respAuth, true);
+                            if (isset($authData['name'])) {
+                                $authorsArr[] = $authData['name'];
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Récupération de l'éditeur
+            $publishersArr = $dataOL['publishers'] ?? [];
+
+            $bookData = [
+                'titre' => $title,
+                'auteur' => implode(', ', $authorsArr),
+                'editeur' => implode(', ', $publishersArr),
+                'annee' => preg_match('/\d{4}/', $publishDate, $m) ? $m[0] : '',
+                'pages' => $numberPages,
+                'resume' => ''
+            ];
+        }
+    }
+
+    if ($bookData && !empty($bookData['titre'])) {
+        echo json_encode(['success' => true, 'data' => $bookData]);
+    } else {
+        echo json_encode(['success' => false, 'error' => 'Aucun livre trouvé pour cet ISBN.']);
+    }
+    exit;
+}
+
+// ==========================================
 // CONFIGURATION & CONNEXION BASE DE DONNÉES
 // ==========================================
 $host = 'localhost';
@@ -30,7 +114,7 @@ $pdo->exec("CREATE TABLE IF NOT EXISTS livres (
     cote VARCHAR(50) DEFAULT NULL,
     editeur VARCHAR(100) DEFAULT NULL,
     annee INT DEFAULT NULL,
-    format VARCHAR(10) NOT NULL, -- PDF, EPUB, MOBI
+    format VARCHAR(10) NOT NULL,
     categorie VARCHAR(100) NOT NULL,
     pages INT DEFAULT NULL,
     resume TEXT DEFAULT NULL,
@@ -140,7 +224,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // ==========================================
-// RÉCUPÉRATION DES DONNÉES, FILTRAGE & PAGINATION
+// RÉCUPÉRATION DES DONNÉES & FILTRES
 // ==========================================
 $search = $_GET['search'] ?? '';
 $filterFormat = $_GET['format'] ?? '';
@@ -167,13 +251,11 @@ if (!empty($filterCat)) {
 
 $whereSql = implode(" AND ", $whereClauses);
 
-// Calcul du nombre total d'éléments
 $countQuery = "SELECT COUNT(*) FROM livres WHERE $whereSql";
 $countStmt = $pdo->prepare($countQuery);
 $countStmt->execute($params);
 $totalRecords = $countStmt->fetchColumn();
 
-// Paramètres de pagination (15 par page)
 $perPage = 15;
 $totalPages = max(1, ceil($totalRecords / $perPage));
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
@@ -181,22 +263,18 @@ if ($page < 1) $page = 1;
 if ($page > $totalPages) $page = $totalPages;
 $offset = ($page - 1) * $perPage;
 
-// Requête paginée sécurisée
 $query = "SELECT * FROM livres WHERE $whereSql ORDER BY id DESC LIMIT $perPage OFFSET $offset";
 $stmt = $pdo->prepare($query);
 $stmt->execute($params);
 $livres = $stmt->fetchAll();
 
-// KPIs globaux
 $totalLivres = $pdo->query("SELECT COUNT(*) FROM livres")->fetchColumn();
 $totalPdf = $pdo->query("SELECT COUNT(*) FROM livres WHERE format='PDF'")->fetchColumn();
 $totalEpub = $pdo->query("SELECT COUNT(*) FROM livres WHERE format='EPUB'")->fetchColumn();
 $totalMobi = $pdo->query("SELECT COUNT(*) FROM livres WHERE format='MOBI'")->fetchColumn();
 
-// Catégories
 $categories = $pdo->query("SELECT DISTINCT categorie FROM livres ORDER BY categorie")->fetchAll(PDO::FETCH_COLUMN);
 
-// Données pour édition éventuelle
 $editLivre = null;
 if (isset($_GET['edit'])) {
     $editId = (int)$_GET['edit'];
@@ -215,7 +293,7 @@ if (isset($_GET['edit'])) {
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- FontAwesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- EPUB.js CDN pour lecture intégrée -->
+    <!-- EPUB.js -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.5/jszip.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
     <style>
@@ -245,7 +323,6 @@ if (isset($_GET['edit'])) {
             </div>
         </div>
 
-        <!-- KPIs en-tête -->
         <div class="hidden md:flex items-center space-x-6 text-sm">
             <div class="flex items-center space-x-2 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-100">
                 <span class="text-gray-500">Total :</span>
@@ -299,14 +376,27 @@ if (isset($_GET['edit'])) {
                 <form action="index.php" method="POST" enctype="multipart/form-data" class="space-y-3">
                     <input type="hidden" name="id" value="<?= $editLivre['id'] ?? '' ?>">
 
+                    <!-- ISBN avec recherche robuste via API interne PHP -->
+                    <div>
+                        <div class="flex items-center justify-between mb-1">
+                            <label class="block text-xs font-medium text-gray-700">ISBN</label>
+                            <button type="button" onclick="fetchBookByISBN()" id="isbnBtn" class="text-[11px] text-indigo-600 hover:text-indigo-800 font-medium flex items-center space-x-1 focus:outline-none">
+                                <i class="fa-solid fa-wand-magic-sparkles"></i>
+                                <span>Remplir via ISBN</span>
+                            </button>
+                        </div>
+                        <input type="text" id="isbnInput" name="isbn" value="<?= htmlspecialchars($editLivre['isbn'] ?? '') ?>" placeholder="ex: 9782070619177" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
+                        <span id="isbnStatus" class="text-[10px] text-gray-400 mt-0.5 block"></span>
+                    </div>
+
                     <div>
                         <label class="block text-xs font-medium text-gray-700 mb-1">Titre *</label>
-                        <input type="text" name="titre" required value="<?= htmlspecialchars($editLivre['titre'] ?? '') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
+                        <input type="text" id="titreInput" name="titre" required value="<?= htmlspecialchars($editLivre['titre'] ?? '') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
                     </div>
 
                     <div>
                         <label class="block text-xs font-medium text-gray-700 mb-1">Auteur(s) *</label>
-                        <input type="text" name="auteur" required value="<?= htmlspecialchars($editLivre['auteur'] ?? '') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
+                        <input type="text" id="auteurInput" name="auteur" required value="<?= htmlspecialchars($editLivre['auteur'] ?? '') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
                     </div>
 
                     <div class="grid grid-cols-2 gap-2">
@@ -326,34 +416,29 @@ if (isset($_GET['edit'])) {
 
                     <div class="grid grid-cols-2 gap-2">
                         <div>
-                            <label class="block text-xs font-medium text-gray-700 mb-1">ISBN</label>
-                            <input type="text" name="isbn" value="<?= htmlspecialchars($editLivre['isbn'] ?? '') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
-                        </div>
-                        <div>
                             <label class="block text-xs font-medium text-gray-700 mb-1">Cote Bibliothèque</label>
                             <input type="text" name="cote" value="<?= htmlspecialchars($editLivre['cote'] ?? '') ?>" placeholder="ex: 843.9 HUGO" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Éditeur</label>
+                            <input type="text" id="editeurInput" name="editeur" value="<?= htmlspecialchars($editLivre['editeur'] ?? '') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
                         </div>
                     </div>
 
                     <div class="grid grid-cols-2 gap-2">
                         <div>
-                            <label class="block text-xs font-medium text-gray-700 mb-1">Éditeur</label>
-                            <input type="text" name="editeur" value="<?= htmlspecialchars($editLivre['editeur'] ?? '') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Année</label>
+                            <input type="number" id="anneeInput" name="annee" value="<?= htmlspecialchars($editLivre['annee'] ?? '') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
                         </div>
                         <div>
-                            <label class="block text-xs font-medium text-gray-700 mb-1">Année</label>
-                            <input type="number" name="annee" value="<?= htmlspecialchars($editLivre['annee'] ?? '') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
+                            <label class="block text-xs font-medium text-gray-700 mb-1">Nb Pages</label>
+                            <input type="number" id="pagesInput" name="pages" value="<?= htmlspecialchars($editLivre['pages'] ?? '') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
                         </div>
-                    </div>
-
-                    <div>
-                        <label class="block text-xs font-medium text-gray-700 mb-1">Nombre de pages</label>
-                        <input type="number" name="pages" value="<?= htmlspecialchars($editLivre['pages'] ?? '') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
                     </div>
 
                     <div>
                         <label class="block text-xs font-medium text-gray-700 mb-1">Résumé / Description</label>
-                        <textarea name="resume" rows="2" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none"><?= htmlspecialchars($editLivre['resume'] ?? '') ?></textarea>
+                        <textarea id="resumeInput" name="resume" rows="2" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none"><?= htmlspecialchars($editLivre['resume'] ?? '') ?></textarea>
                     </div>
 
                     <div>
@@ -527,13 +612,12 @@ if (isset($_GET['edit'])) {
         </main>
     </div>
 
-    <!-- Modale de Prévisualisation / Lecture (PDF & EPUB Intégré) -->
+    <!-- Modale de Prévisualisation / Lecture -->
     <div id="previewModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
         <div class="bg-white rounded-xl shadow-2xl w-full max-w-4xl h-[85vh] flex flex-col overflow-hidden">
             <div class="p-4 border-b border-gray-200 flex items-center justify-between bg-gray-50 shrink-0">
                 <div class="flex items-center space-x-4">
                     <h3 id="modalTitle" class="font-semibold text-gray-800 text-sm">Lecture de l'ouvrage</h3>
-                    <!-- Contrôles spécifiques EPUB (Page précédente / suivante) -->
                     <div id="epubControls" class="hidden items-center space-x-1">
                         <button onclick="prevEpubPage()" class="px-2 py-1 bg-white border border-gray-300 rounded text-xs hover:bg-gray-100 text-gray-700 shadow-sm" title="Page précédente"><i class="fa-solid fa-chevron-left"></i> Précédent</button>
                         <button onclick="nextEpubPage()" class="px-2 py-1 bg-white border border-gray-300 rounded text-xs hover:bg-gray-100 text-gray-700 shadow-sm" title="Page suivante">Suivant <i class="fa-solid fa-chevron-right"></i></button>
@@ -545,17 +629,11 @@ if (isset($_GET['edit'])) {
                 </div>
             </div>
             
-            <!-- Conteneurs de visionneuse -->
             <div class="flex-1 bg-gray-100 relative flex items-center justify-center overflow-hidden" id="modalBodyContainer">
-                <!-- Lecteur PDF -->
                 <iframe id="previewIframe" src="" class="w-full h-full border-0 hidden"></iframe>
-                
-                <!-- Lecteur EPUB Intégré (Epub.js) -->
                 <div id="epubViewerContainer" class="w-full h-full hidden flex items-center justify-center bg-white p-4">
                     <div id="viewer" class="w-full h-full max-w-2xl"></div>
                 </div>
-
-                <!-- Fallback pour MOBI ou formats non pris en charge en ligne -->
                 <div id="epubFallback" class="hidden absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-white">
                     <div class="text-indigo-600 text-4xl mb-3"><i class="fa-solid fa-book"></i></div>
                     <h4 class="font-semibold text-gray-800 mb-1">Format MOBI</h4>
@@ -584,7 +662,48 @@ if (isset($_GET['edit'])) {
             }
         }
 
-        // Gestion de la Modale et des Lecteurs
+        // --- RECHERCHE ISBN VIA BACKEND PHP (Contourne les restrictions CORS) ---
+        async function fetchBookByISBN() {
+            const isbnInput = document.getElementById('isbnInput');
+            const isbnStatus = document.getElementById('isbnStatus');
+            const isbn = isbnInput.value.trim();
+
+            if (!isbn) {
+                isbnStatus.textContent = "Veuillez entrer un code ISBN d'abord.";
+                isbnStatus.className = "text-[10px] text-red-500 mt-0.5 block";
+                return;
+            }
+
+            isbnStatus.textContent = "Recherche en cours (Google Books / Open Library)...";
+            isbnStatus.className = "text-[10px] text-indigo-500 mt-0.5 block";
+
+            try {
+                const response = await fetch(`index.php?ajax_isbn=${encodeURIComponent(isbn)}`);
+                const result = await response.json();
+
+                if (result.success && result.data) {
+                    const book = result.data;
+                    if (book.titre) document.getElementById('titreInput').value = book.titre;
+                    if (book.auteur) document.getElementById('auteurInput').value = book.auteur;
+                    if (book.editeur) document.getElementById('editeurInput').value = book.editeur;
+                    if (book.annee) document.getElementById('anneeInput').value = book.annee;
+                    if (book.pages) document.getElementById('pagesInput').value = book.pages;
+                    if (book.resume) document.getElementById('resumeInput').value = book.resume.substring(0, 300) + '...';
+
+                    isbnStatus.textContent = "Livre trouvé et champs remplis avec succès !";
+                    isbnStatus.className = "text-[10px] text-emerald-600 mt-0.5 block font-semibold";
+                } else {
+                    isbnStatus.textContent = "Aucun ouvrage trouvé pour cet ISBN.";
+                    isbnStatus.className = "text-[10px] text-red-500 mt-0.5 block";
+                }
+            } catch (error) {
+                console.error(error);
+                isbnStatus.textContent = "Erreur de communication avec le serveur.";
+                isbnStatus.className = "text-[10px] text-red-500 mt-0.5 block";
+            }
+        }
+
+        // --- Gestion de la Modale de Lecture ---
         const previewModal = document.getElementById('previewModal');
         const previewIframe = document.getElementById('previewIframe');
         const epubViewerContainer = document.getElementById('epubViewerContainer');
@@ -600,7 +719,6 @@ if (isset($_GET['edit'])) {
             modalTitle.textContent = "Lecture : " + title;
             previewModal.classList.remove('hidden');
             
-            // Réinitialiser les affichages
             previewIframe.classList.add('hidden');
             epubViewerContainer.classList.add('hidden');
             epubFallback.classList.add('hidden');
@@ -615,10 +733,8 @@ if (isset($_GET['edit'])) {
                 epubViewerContainer.classList.remove('hidden');
                 epubControls.classList.remove('hidden');
                 
-                // Nettoyer l'instance précédente si elle existe
                 document.getElementById('viewer').innerHTML = '';
 
-                // Charger et rendre l'EPUB via Epub.js
                 currentBook = ePub(filePath);
                 currentRendition = currentBook.renderTo("viewer", {
                     width: "100%",
@@ -627,7 +743,6 @@ if (isset($_GET['edit'])) {
                 });
                 currentRendition.display();
             } else {
-                // Fallback (MOBI, etc.)
                 epubFallback.classList.remove('hidden');
                 fallbackDownloadBtn.href = filePath;
             }
