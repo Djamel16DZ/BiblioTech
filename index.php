@@ -9,7 +9,27 @@ define('DB_PASS', 'root');
 define('DB_CHARSET', 'utf8mb4');
 
 // ==========================================
-// 2. API INTERNE DE RECHERCHE ISBN (AJAX PHP)
+// 2. AIDE ET FONCTIONS DE SÉCURITÉ
+// ==========================================
+
+/**
+ * Nettoyage XSS global
+ */
+function e(?string $str): string {
+    return htmlspecialchars($str ?? '', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+}
+
+/**
+ * Vérification contre le Traversal Directory (Path Traversal)
+ */
+function isSafePath(string $filePath, string $baseDir): bool {
+    $realBase = realpath($baseDir);
+    $realPath = realpath($filePath);
+    return $realPath !== false && $realBase !== false && strpos($realPath, $realBase) === 0;
+}
+
+// ==========================================
+// 3. API INTERNE DE RECHERCHE ISBN (AJAX PHP)
 // ==========================================
 if (isset($_GET['ajax_isbn'])) {
     header('Content-Type: application/json');
@@ -91,7 +111,7 @@ if (isset($_GET['ajax_isbn'])) {
 }
 
 // ==========================================
-// 3. CONNEXION BASE DE DONNÉES & AUTO-MIGRATION
+// 4. CONNEXION BASE DE DONNÉES & AUTO-MIGRATION
 // ==========================================
 $dsn = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
 $options = [
@@ -103,7 +123,7 @@ $options = [
 try {
     $pdo = new PDO($dsn, DB_USER, DB_PASS, $options);
 } catch (\PDOException $e) {
-    die("Erreur de connexion à la base de données : " . $e->getMessage());
+    die("Erreur de connexion à la base de données : " . e($e->getMessage()));
 }
 
 // Création de la table avec index de performance
@@ -133,72 +153,85 @@ if (!is_dir($uploadDir)) {
 }
 
 // ==========================================
-// 4. TRAITEMENT DES REQUÊTES (POST / GET)
+// 5. TRAITEMENT DES REQUÊTES (POST / GET)
 // ==========================================
 $error = '';
+$maxFileSize = 50 * 1024 * 1024; // Limit à 50 Mo
 
+// SUPPRESSION SÉCURISÉE
 if (isset($_GET['action']) && $_GET['action'] == 'delete' && isset($_GET['id'])) {
-    $id = (int)$_GET['id'];
-    $stmt = $pdo->prepare("SELECT fichier FROM livres WHERE id = ?");
-    $stmt->execute([$id]);
-    $livre = $stmt->fetch();
-    
-    if ($livre) {
-        $filePath = $livre['fichier'];
-        if (strpos(realpath($filePath), realpath($uploadDir)) === 0 && file_exists($filePath)) {
-            unlink($filePath);
+    $id = filter_var($_GET['id'], FILTER_VALIDATE_INT);
+    if ($id !== false && $id > 0) {
+        $stmt = $pdo->prepare("SELECT fichier FROM livres WHERE id = ?");
+        $stmt->execute([$id]);
+        $livre = $stmt->fetch();
+        
+        if ($livre) {
+            $filePath = $livre['fichier'];
+            if (isSafePath($filePath, $uploadDir) && file_exists($filePath)) {
+                unlink($filePath);
+            }
+            $stmtDel = $pdo->prepare("DELETE FROM livres WHERE id = ?");
+            $stmtDel->execute([$id]);
+            header("Location: index.php?msg=deleted");
+            exit;
         }
-        $stmtDel = $pdo->prepare("DELETE FROM livres WHERE id = ?");
-        $stmtDel->execute([$id]);
-        header("Location: index.php?msg=deleted");
-        exit;
     }
 }
 
+// ENREGISTREMENT / MODIFICATION
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $id = isset($_POST['id']) ? (int)$_POST['id'] : 0;
+    $id = filter_input(INPUT_POST, 'id', FILTER_VALIDATE_INT) ?: 0;
     $titre = trim($_POST['titre'] ?? '');
     $auteur = trim($_POST['auteur'] ?? '');
-    $isbn = trim($_POST['isbn'] ?? '');
+    $isbn = preg_replace('/[^0-9X]/i', '', $_POST['isbn'] ?? '');
     $cote = trim($_POST['cote'] ?? '');
     $editeur = trim($_POST['editeur'] ?? '');
-    $annee = !empty($_POST['annee']) ? (int)$_POST['annee'] : null;
-    $format = $_POST['format'] ?? 'PDF';
+    $annee = filter_input(INPUT_POST, 'annee', FILTER_VALIDATE_INT, ["options" => ["min_range" => 1000, "max_range" => date('Y') + 1]]) ?: null;
+    
+    $formatInput = strtoupper(trim($_POST['format'] ?? 'PDF'));
+    $allowedFormats = ['PDF', 'EPUB', 'MOBI'];
+    $format = in_array($formatInput, $allowedFormats, true) ? $formatInput : 'PDF';
+
     $categorie = trim($_POST['categorie'] ?? 'Général');
-    $pages = !empty($_POST['pages']) ? (int)$_POST['pages'] : null;
+    $pages = filter_input(INPUT_POST, 'pages', FILTER_VALIDATE_INT, ["options" => ["min_range" => 1]]) ?: null;
     $resume = trim($_POST['resume'] ?? '');
 
     $filePath = '';
     $fileUploaded = false;
 
     if (isset($_FILES['fichier']) && $_FILES['fichier']['error'] === UPLOAD_ERR_OK) {
-        $fileTmpPath = $_FILES['fichier']['tmp_name'];
-        $fileName = $_FILES['fichier']['name'];
-        
-        $fileExtension = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
-        $allowedExtensions = ['pdf', 'epub', 'mobi'];
-
-        $allowedMimes = [
-            'pdf'  => ['application/pdf', 'application/x-pdf'],
-            'epub' => ['application/epub+zip'],
-            'mobi' => ['application/x-mobipocket-ebook', 'application/octet-stream', 'application/x-mobi']
-        ];
-
-        $finfo = new finfo(FILEINFO_MIME_TYPE);
-        $detectedMime = $finfo->file($fileTmpPath);
-
-        if (in_array($fileExtension, $allowedExtensions) && isset($allowedMimes[$fileExtension]) && in_array($detectedMime, $allowedMimes[$fileExtension])) {
-            $newFileName = md5(bin2hex(random_bytes(8)) . time() . $fileName) . '.' . $fileExtension;
-            $dest_path = $uploadDir . $newFileName;
-
-            if (move_uploaded_file($fileTmpPath, $dest_path)) {
-                $filePath = $dest_path;
-                $fileUploaded = true;
-            } else {
-                $error = "Erreur lors du déplacement du fichier téléchargé.";
-            }
+        if ($_FILES['fichier']['size'] > $maxFileSize) {
+            $error = "Le fichier dépasse la taille maximale autorisée (50 Mo).";
         } else {
-            $error = "Fichier invalide ou format non autorisé. Formats acceptés : PDF, EPUB, MOBI.";
+            $fileTmpPath = $_FILES['fichier']['tmp_name'];
+            $fileName = basename($_FILES['fichier']['name']);
+            $fileExtension = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+
+            $allowedExtensions = ['pdf', 'epub', 'mobi'];
+            $allowedMimes = [
+                'pdf'  => ['application/pdf', 'application/x-pdf'],
+                'epub' => ['application/epub+zip'],
+                'mobi' => ['application/x-mobipocket-ebook', 'application/octet-stream', 'application/x-mobi']
+            ];
+
+            $finfo = new finfo(FILEINFO_MIME_TYPE);
+            $detectedMime = $finfo->file($fileTmpPath);
+
+            if (in_array($fileExtension, $allowedExtensions, true) && isset($allowedMimes[$fileExtension]) && in_array($detectedMime, $allowedMimes[$fileExtension], true)) {
+                // Génération de nom aléatoire fort
+                $newFileName = bin2hex(random_bytes(16)) . '.' . $fileExtension;
+                $destPath = $uploadDir . $newFileName;
+
+                if (move_uploaded_file($fileTmpPath, $destPath)) {
+                    $filePath = $destPath;
+                    $fileUploaded = true;
+                } else {
+                    $error = "Erreur lors du déplacement du fichier téléchargé.";
+                }
+            } else {
+                $error = "Format ou type MIME non valide. Formats acceptés : PDF, EPUB, MOBI.";
+            }
         }
     }
 
@@ -208,15 +241,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $pdo->prepare("SELECT fichier FROM livres WHERE id = ?");
                 $stmt->execute([$id]);
                 $oldData = $stmt->fetch();
-                $filePath = $oldData['fichier'];
+                $filePath = $oldData['fichier'] ?? '';
             } else {
                 $stmt = $pdo->prepare("SELECT fichier FROM livres WHERE id = ?");
                 $stmt->execute([$id]);
                 $oldData = $stmt->fetch();
-                if ($oldData && file_exists($oldData['fichier'])) {
-                    if (strpos(realpath($oldData['fichier']), realpath($uploadDir)) === 0) {
-                        unlink($oldData['fichier']);
-                    }
+                if ($oldData && isSafePath($oldData['fichier'], $uploadDir) && file_exists($oldData['fichier'])) {
+                    unlink($oldData['fichier']);
                 }
             }
 
@@ -240,11 +271,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // ==========================================
-// 5. RÉCUPÉRATION DES DONNÉES & FILTRES
+// 6. RÉCUPÉRATION DES DONNÉES & FILTRES
 // ==========================================
-$search = $_GET['search'] ?? '';
-$filterFormat = $_GET['format'] ?? '';
-$filterCat = $_GET['categorie'] ?? '';
+$search = trim($_GET['search'] ?? '');
+$filterFormat = strtoupper(trim($_GET['format'] ?? ''));
+$filterCat = trim($_GET['categorie'] ?? '');
 
 $whereClauses = ["1=1"];
 $params = [];
@@ -255,7 +286,7 @@ if (!empty($search)) {
     array_push($params, $searchTerm, $searchTerm, $searchTerm, $searchTerm);
 }
 
-if (!empty($filterFormat)) {
+if (!empty($filterFormat) && in_array($filterFormat, ['PDF', 'EPUB', 'MOBI'], true)) {
     $whereClauses[] = "format = ?";
     $params[] = $filterFormat;
 }
@@ -273,13 +304,13 @@ $countStmt->execute($params);
 $totalRecords = $countStmt->fetchColumn();
 
 $perPage = 15;
-$totalPages = max(1, ceil($totalRecords / $perPage));
-$page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+$totalPages = max(1, (int)ceil($totalRecords / $perPage));
+$page = filter_input(INPUT_GET, 'page', FILTER_VALIDATE_INT) ?: 1;
 if ($page < 1) $page = 1;
 if ($page > $totalPages) $page = $totalPages;
 $offset = ($page - 1) * $perPage;
 
-$query = "SELECT * FROM livres WHERE $whereSql ORDER BY id DESC LIMIT $perPage OFFSET $offset";
+$query = "SELECT * FROM livres WHERE $whereSql ORDER BY id DESC LIMIT " . (int)$perPage . " OFFSET " . (int)$offset;
 $stmt = $pdo->prepare($query);
 $stmt->execute($params);
 $livres = $stmt->fetchAll();
@@ -293,10 +324,12 @@ $categories = $pdo->query("SELECT DISTINCT categorie FROM livres ORDER BY catego
 
 $editLivre = null;
 if (isset($_GET['edit'])) {
-    $editId = (int)$_GET['edit'];
-    $stmtEdit = $pdo->prepare("SELECT * FROM livres WHERE id = ?");
-    $stmtEdit->execute([$editId]);
-    $editLivre = $stmtEdit->fetch();
+    $editId = filter_var($_GET['edit'], FILTER_VALIDATE_INT);
+    if ($editId !== false) {
+        $stmtEdit = $pdo->prepare("SELECT * FROM livres WHERE id = ?");
+        $stmtEdit->execute([$editId]);
+        $editLivre = $stmtEdit->fetch();
+    }
 }
 ?>
 <!DOCTYPE html>
@@ -346,19 +379,19 @@ if (isset($_GET['edit'])) {
         <div class="hidden md:flex items-center space-x-6 text-sm">
             <div class="flex items-center space-x-2 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-100">
                 <span class="text-gray-500">Total :</span>
-                <span class="font-semibold text-gray-800"><?= $totalLivres ?></span>
+                <span class="font-semibold text-gray-800"><?= e($totalLivres) ?></span>
             </div>
             <div class="flex items-center space-x-2 bg-red-50 px-3 py-1.5 rounded-lg border border-red-100">
                 <span class="text-red-600">PDF :</span>
-                <span class="font-semibold text-red-700"><?= $totalPdf ?></span>
+                <span class="font-semibold text-red-700"><?= e($totalPdf) ?></span>
             </div>
             <div class="flex items-center space-x-2 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-100">
                 <span class="text-emerald-600">EPUB :</span>
-                <span class="font-semibold text-emerald-700"><?= $totalEpub ?></span>
+                <span class="font-semibold text-emerald-700"><?= e($totalEpub) ?></span>
             </div>
             <div class="flex items-center space-x-2 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-100">
                 <span class="text-blue-600">MOBI :</span>
-                <span class="font-semibold text-blue-700"><?= $totalMobi ?></span>
+                <span class="font-semibold text-blue-700"><?= e($totalMobi) ?></span>
             </div>
         </div>
 
@@ -394,12 +427,12 @@ if (isset($_GET['edit'])) {
             <div class="flex-1 overflow-y-auto p-4 space-y-4">
                 <?php if (!empty($error)): ?>
                     <div class="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg text-xs">
-                        <?= htmlspecialchars($error) ?>
+                        <?= e($error) ?>
                     </div>
                 <?php endif; ?>
 
                 <form action="index.php" method="POST" enctype="multipart/form-data" class="space-y-3">
-                    <input type="hidden" name="id" value="<?= $editLivre['id'] ?? '' ?>">
+                    <input type="hidden" name="id" value="<?= e($editLivre['id'] ?? '') ?>">
 
                     <div>
                         <div class="flex items-center justify-between mb-1">
@@ -409,18 +442,18 @@ if (isset($_GET['edit'])) {
                                 <span>Remplir via ISBN</span>
                             </button>
                         </div>
-                        <input type="text" id="isbnInput" name="isbn" value="<?= htmlspecialchars($editLivre['isbn'] ?? '') ?>" placeholder="ex: 9782070619177" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
+                        <input type="text" id="isbnInput" name="isbn" value="<?= e($editLivre['isbn'] ?? '') ?>" placeholder="ex: 9782070619177" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
                         <span id="isbnStatus" class="text-[10px] text-gray-400 mt-0.5 block"></span>
                     </div>
 
                     <div>
                         <label class="block text-xs font-medium text-gray-700 mb-1">Titre *</label>
-                        <input type="text" id="titreInput" name="titre" required value="<?= htmlspecialchars($editLivre['titre'] ?? '') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
+                        <input type="text" id="titreInput" name="titre" required value="<?= e($editLivre['titre'] ?? '') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
                     </div>
 
                     <div>
                         <label class="block text-xs font-medium text-gray-700 mb-1">Auteur(s) *</label>
-                        <input type="text" id="auteurInput" name="auteur" required value="<?= htmlspecialchars($editLivre['auteur'] ?? '') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
+                        <input type="text" id="auteurInput" name="auteur" required value="<?= e($editLivre['auteur'] ?? '') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
                     </div>
 
                     <div class="grid grid-cols-2 gap-2">
@@ -434,35 +467,35 @@ if (isset($_GET['edit'])) {
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-700 mb-1">Catégorie *</label>
-                            <input type="text" name="categorie" required value="<?= htmlspecialchars($editLivre['categorie'] ?? 'Roman') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
+                            <input type="text" name="categorie" required value="<?= e($editLivre['categorie'] ?? 'Roman') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
                         </div>
                     </div>
 
                     <div class="grid grid-cols-2 gap-2">
                         <div>
                             <label class="block text-xs font-medium text-gray-700 mb-1">Cote Bibliothèque</label>
-                            <input type="text" name="cote" value="<?= htmlspecialchars($editLivre['cote'] ?? '') ?>" placeholder="ex: 843.9 HUGO" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
+                            <input type="text" name="cote" value="<?= e($editLivre['cote'] ?? '') ?>" placeholder="ex: 843.9 HUGO" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-700 mb-1">Éditeur</label>
-                            <input type="text" id="editeurInput" name="editeur" value="<?= htmlspecialchars($editLivre['editeur'] ?? '') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
+                            <input type="text" id="editeurInput" name="editeur" value="<?= e($editLivre['editeur'] ?? '') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
                         </div>
                     </div>
 
                     <div class="grid grid-cols-2 gap-2">
                         <div>
                             <label class="block text-xs font-medium text-gray-700 mb-1">Année</label>
-                            <input type="number" id="anneeInput" name="annee" value="<?= htmlspecialchars($editLivre['annee'] ?? '') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
+                            <input type="number" id="anneeInput" name="annee" value="<?= e($editLivre['annee'] ?? '') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
                         </div>
                         <div>
                             <label class="block text-xs font-medium text-gray-700 mb-1">Nb Pages</label>
-                            <input type="number" id="pagesInput" name="pages" value="<?= htmlspecialchars($editLivre['pages'] ?? '') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
+                            <input type="number" id="pagesInput" name="pages" value="<?= e($editLivre['pages'] ?? '') ?>" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none">
                         </div>
                     </div>
 
                     <div>
                         <label class="block text-xs font-medium text-gray-700 mb-1">Résumé / Description</label>
-                        <textarea id="resumeInput" name="resume" rows="2" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none"><?= htmlspecialchars($editLivre['resume'] ?? '') ?></textarea>
+                        <textarea id="resumeInput" name="resume" rows="2" class="w-full text-sm border border-gray-300 rounded-lg px-3 py-2 focus:ring-1 focus:ring-indigo-500 focus:outline-none"><?= e($editLivre['resume'] ?? '') ?></textarea>
                     </div>
 
                     <div>
@@ -486,7 +519,7 @@ if (isset($_GET['edit'])) {
             <div class="bg-white border-b border-gray-200 p-4 shrink-0 space-y-3">
                 <div class="flex flex-wrap items-center justify-between gap-4">
                     <div class="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                        Catalogue des ouvrages (<?= $totalRecords ?> résultat<?= $totalRecords > 1 ? 's' : '' ?>)
+                        Catalogue des ouvrages (<?= e($totalRecords) ?> résultat<?= $totalRecords > 1 ? 's' : '' ?>)
                     </div>
 
                     <form action="index.php" method="GET" class="flex items-center space-x-2">
@@ -494,7 +527,7 @@ if (isset($_GET['edit'])) {
                             <span class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-gray-400">
                                 <i class="fa-solid fa-search text-xs"></i>
                             </span>
-                            <input type="text" name="search" value="<?= htmlspecialchars($search) ?>" placeholder="Rechercher titre, auteur, ISBN, cote..." class="pl-8 pr-4 py-1.5 text-xs bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 w-56 md:w-72">
+                            <input type="text" name="search" value="<?= e($search) ?>" placeholder="Rechercher titre, auteur, ISBN, cote..." class="pl-8 pr-4 py-1.5 text-xs bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 w-56 md:w-72">
                         </div>
 
                         <select name="format" onchange="this.form.submit()" class="text-xs bg-gray-50 border border-gray-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500">
@@ -507,7 +540,7 @@ if (isset($_GET['edit'])) {
                         <select name="categorie" onchange="this.form.submit()" class="text-xs bg-gray-50 border border-gray-300 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-500">
                             <option value="">Toutes catégories</option>
                             <?php foreach($categories as $cat): ?>
-                                <option value="<?= htmlspecialchars($cat) ?>" <?= $filterCat==$cat?'selected':'' ?>><?= htmlspecialchars($cat) ?></option>
+                                <option value="<?= e($cat) ?>" <?= $filterCat==$cat?'selected':'' ?>><?= e($cat) ?></option>
                             <?php endforeach; ?>
                         </select>
 
@@ -548,32 +581,32 @@ if (isset($_GET['edit'])) {
                                                     elseif($l['format'] == 'MOBI') $badgeColor = 'bg-blue-50 text-blue-700 border-blue-200';
                                                 ?>
                                                 <span class="px-1.5 py-0.5 rounded border text-[9px] font-bold uppercase shrink-0 <?= $badgeColor ?>">
-                                                    <?= htmlspecialchars($l['format']) ?>
+                                                    <?= e($l['format']) ?>
                                                 </span>
-                                                <div class="font-semibold text-gray-900 truncate" title="<?= htmlspecialchars($l['titre']) ?>"><?= htmlspecialchars($l['titre']) ?></div>
+                                                <div class="font-semibold text-gray-900 truncate" title="<?= e($l['titre']) ?>"><?= e($l['titre']) ?></div>
                                             </div>
-                                            <div class="text-gray-500 truncate mt-0.5 pl-7" title="<?= htmlspecialchars($l['auteur']) ?>"><?= htmlspecialchars($l['auteur']) ?> <?php if($l['annee']) echo "({$l['annee']})"; ?></div>
+                                            <div class="text-gray-500 truncate mt-0.5 pl-7" title="<?= e($l['auteur']) ?>"><?= e($l['auteur']) ?> <?php if($l['annee']) echo "(" . e($l['annee']) . ")"; ?></div>
                                         </td>
                                         <td class="p-3">
-                                            <span class="bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full text-[11px]"><?= htmlspecialchars($l['categorie']) ?></span>
+                                            <span class="bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full text-[11px]"><?= e($l['categorie']) ?></span>
                                         </td>
                                         <td class="p-3 font-mono font-medium text-indigo-700">
-                                            <?= htmlspecialchars($l['cote'] ?: '-') ?>
+                                            <?= e($l['cote'] ?: '-') ?>
                                         </td>
                                         <td class="p-3 text-gray-500 font-mono">
-                                            <?= htmlspecialchars($l['isbn'] ?: '-') ?>
+                                            <?= e($l['isbn'] ?: '-') ?>
                                         </td>
                                         <td class="p-3 text-right space-x-2 whitespace-nowrap">
-                                            <a href="<?= htmlspecialchars($l['fichier']) ?>" target="_blank" class="text-gray-500 hover:text-indigo-600 transition" title="Ouvrir le fichier">
+                                            <a href="<?= e($l['fichier']) ?>" target="_blank" class="text-gray-500 hover:text-indigo-600 transition" title="Ouvrir le fichier">
                                                 <i class="fa-solid fa-eye text-sm"></i>
                                             </a>
-                                            <a href="<?= htmlspecialchars($l['fichier']) ?>" download class="text-gray-500 hover:text-emerald-600 transition" title="Télécharger">
+                                            <a href="<?= e($l['fichier']) ?>" download class="text-gray-500 hover:text-emerald-600 transition" title="Télécharger">
                                                 <i class="fa-solid fa-download text-sm"></i>
                                             </a>
-                                            <a href="index.php?edit=<?= $l['id'] ?>" class="text-gray-500 hover:text-blue-600 transition" title="Modifier">
+                                            <a href="index.php?edit=<?= e($l['id']) ?>" class="text-gray-500 hover:text-blue-600 transition" title="Modifier">
                                                 <i class="fa-solid fa-pen-to-square text-sm"></i>
                                             </a>
-                                            <a href="index.php?action=delete&id=<?= $l['id'] ?>" onclick="return confirm('Êtes-vous sûr de vouloir supprimer cet ouvrage ?');" class="text-gray-500 hover:text-red-600 transition" title="Supprimer">
+                                            <a href="index.php?action=delete&id=<?= e($l['id']) ?>" onclick="return confirm('Êtes-vous sûr de vouloir supprimer cet ouvrage ?');" class="text-gray-500 hover:text-red-600 transition" title="Supprimer">
                                                 <i class="fa-solid fa-trash text-sm"></i>
                                             </a>
                                         </td>
@@ -588,14 +621,14 @@ if (isset($_GET['edit'])) {
                 <?php if ($totalPages > 1): ?>
                     <div class="flex items-center justify-between bg-white px-4 py-3 border border-gray-200 rounded-xl shadow-sm text-xs shrink-0">
                         <div class="text-gray-500">
-                            Page <span class="font-semibold text-gray-800"><?= $page ?></span> sur <span class="font-semibold text-gray-800"><?= $totalPages ?></span> (<?= $totalRecords ?> livres)
+                            Page <span class="font-semibold text-gray-800"><?= e($page) ?></span> sur <span class="font-semibold text-gray-800"><?= e($totalPages) ?></span> (<?= e($totalRecords) ?> livres)
                         </div>
                         <div class="flex items-center space-x-1">
                             <?php 
                                 $queryString = $_GET;
                                 unset($queryString['page']);
                                 $queryParameters = http_build_query($queryString);
-                                $paramPrefix = !empty($queryParameters) ? '&' . $queryParameters : '';
+                                $paramPrefix = !empty($queryParameters) ? '&' . e($queryParameters) : '';
                             ?>
 
                             <?php if ($page > 1): ?>
