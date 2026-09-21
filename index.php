@@ -156,7 +156,7 @@ if (!is_dir($uploadDir)) {
 // 5. TRAITEMENT DES REQUÊTES (POST / GET)
 // ==========================================
 $error = '';
-$maxFileSize = 50 * 1024 * 1024; // Limit à 50 Mo
+$maxFileSize = 50 * 1024 * 1024; // Limite à 50 Mo
 
 // SUPPRESSION SÉCURISÉE
 if (isset($_GET['action']) && $_GET['action'] == 'delete' && isset($_GET['id'])) {
@@ -219,7 +219,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $detectedMime = $finfo->file($fileTmpPath);
 
             if (in_array($fileExtension, $allowedExtensions, true) && isset($allowedMimes[$fileExtension]) && in_array($detectedMime, $allowedMimes[$fileExtension], true)) {
-                // Génération de nom aléatoire fort
                 $newFileName = bin2hex(random_bytes(16)) . '.' . $fileExtension;
                 $destPath = $uploadDir . $newFileName;
 
@@ -597,9 +596,9 @@ if (isset($_GET['edit'])) {
                                             <?= e($l['isbn'] ?: '-') ?>
                                         </td>
                                         <td class="p-3 text-right space-x-2 whitespace-nowrap">
-                                            <a href="<?= e($l['fichier']) ?>" target="_blank" class="text-gray-500 hover:text-indigo-600 transition" title="Ouvrir le fichier">
+                                            <button onclick="openReaderModal('<?= e($l['fichier']) ?>', '<?= e(addslashes($l['titre'])) ?>', '<?= e($l['format']) ?>')" class="text-gray-500 hover:text-indigo-600 transition" title="Lire / Aperçu">
                                                 <i class="fa-solid fa-eye text-sm"></i>
-                                            </a>
+                                            </button>
                                             <a href="<?= e($l['fichier']) ?>" download class="text-gray-500 hover:text-emerald-600 transition" title="Télécharger">
                                                 <i class="fa-solid fa-download text-sm"></i>
                                             </a>
@@ -655,6 +654,46 @@ if (isset($_GET['edit'])) {
         </main>
     </div>
 
+    <!-- Modal Lecteur / Reader Modal -->
+    <div id="readerModal" class="fixed inset-0 bg-gray-900/80 backdrop-blur-sm z-50 hidden flex flex-col justify-between p-4 md:p-6 transition-opacity">
+        <div class="bg-white rounded-xl shadow-2xl flex flex-col h-full overflow-hidden">
+            <!-- Top Bar -->
+            <div class="bg-gray-900 text-white px-6 py-4 flex items-center justify-between shrink-0">
+                <div class="flex items-center space-x-3">
+                    <div class="p-2 bg-gray-800 rounded-lg text-indigo-400">
+                        <i class="fa-solid fa-book-open"></i>
+                    </div>
+                    <div>
+                        <h3 id="readerTitle" class="font-bold text-sm md:text-base text-gray-100 truncate max-w-md">Document</h3>
+                        <p id="readerMeta" class="text-xs text-gray-400 font-mono"></p>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-3">
+                    <a id="readerDownloadBtn" href="#" download class="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center space-x-1.5">
+                        <i class="fa-solid fa-download"></i>
+                        <span class="hidden sm:inline">Télécharger</span>
+                    </a>
+                    <button onclick="closeReaderModal()" class="text-gray-400 hover:text-white p-2 text-lg">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Viewer Container -->
+            <div class="flex-1 bg-gray-100 relative overflow-hidden">
+                <iframe id="readerIframe" src="" class="w-full h-full border-0"></iframe>
+                <div id="fallbackViewer" class="hidden absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-white">
+                    <i class="fa-solid fa-file-circle-exclamation text-5xl text-amber-500 mb-4"></i>
+                    <h4 class="text-lg font-bold text-gray-800 mb-2">Aperçu direct non disponible</h4>
+                    <p class="text-xs text-gray-500 max-w-md mb-6">Ce format de fichier ne supporte pas l'affichage direct dans le navigateur. Vous pouvez le télécharger pour le lire avec votre application habituelle.</p>
+                    <a id="fallbackDownloadBtn" href="#" download class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-xs font-medium transition">
+                        Télécharger le fichier
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- JavaScript Application Logic -->
     <script>
         function toggleSidebar() {
@@ -706,6 +745,40 @@ if (isset($_GET['edit'])) {
                 statusSpan.textContent = "Erreur de connexion lors de la recherche.";
                 statusSpan.className = "text-[10px] text-red-500 mt-0.5 block";
             }
+        }
+
+        function openReaderModal(filePath, title, format) {
+            const modal = document.getElementById('readerModal');
+            const iframe = document.getElementById('readerIframe');
+            const fallback = document.getElementById('fallbackViewer');
+            const titleEl = document.getElementById('readerTitle');
+            const metaEl = document.getElementById('readerMeta');
+            const downloadBtn = document.getElementById('readerDownloadBtn');
+            const fallbackDownloadBtn = document.getElementById('fallbackDownloadBtn');
+
+            titleEl.textContent = title;
+            metaEl.textContent = `Format : ${format}`;
+            downloadBtn.href = filePath;
+            fallbackDownloadBtn.href = filePath;
+
+            if (format.toUpperCase() === 'PDF') {
+                iframe.src = filePath;
+                iframe.classList.remove('hidden');
+                fallback.classList.add('hidden');
+            } else {
+                iframe.src = 'about:blank';
+                iframe.classList.add('hidden');
+                fallback.classList.remove('hidden');
+            }
+
+            modal.classList.remove('hidden');
+        }
+
+        function closeReaderModal() {
+            const modal = document.getElementById('readerModal');
+            const iframe = document.getElementById('readerIframe');
+            iframe.src = 'about:blank';
+            modal.classList.add('hidden');
         }
     </script>
 </body>

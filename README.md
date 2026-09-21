@@ -1,56 +1,102 @@
-# BiblioTech - Digital Library Manager (MVP)
+# BiblioTech - Full-Stack Digital Library Application (PHP / MariaDB)
 
-BiblioTech is a lightweight, intuitive monolithic web application built with PHP and Tailwind CSS to manage, organize, and read digital books in PDF, EPUB, and MOBI formats.
-
----
-
-## 🌟 Key Features
-
-- **Automatic ISBN Data Fetching (Internal API & AJAX)**:
-  - Dedicated PHP endpoint (`?ajax_isbn=...`) querying **Google Books API** (primary) with an automatic fallback to **Open Library API**.
-  - Dynamically fetches and populates book details: title, author(s), publisher, publication year, page count, and summary.
-  - Bypass browser CORS restrictions and network limitations seamlessly via server-side requests.
-- **Complete Book Management (CRUD)**:
-  - Add, edit, delete, and download digital documents.
-  - Secure file upload handling with cryptographically secure random file naming (`bin2hex(random_bytes(16))`).
-  - Automatic physical file cleanup upon book deletion or file replacement with directory traversal checks.
-- **Enhanced Security & Hardening**:
-  - Global `e()` helper function for strict XSS prevention across all rendered output.
-  - Dual file validation: extension checking (`.pdf`, `.epub`, `.mobi`) combined with `finfo` MIME-type verification.
-  - Hard limit on file uploads (50 MB) to protect against storage abuse.
-  - Directory traversal prevention (`isSafePath()`) restricting file modifications strictly within `uploads/books/`.
-  - Direct execution protection on storage folders using Apache access controls (`.htaccess`).
-- **Optimized Database & Centralized Config**:
-  - Centralized connection constants (`DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASS`, `DB_CHARSET`) for easy configuration.
-  - Parameterized PDO queries with strict data sanitization (`FILTER_VALIDATE_INT`, `preg_replace`).
-  - Database table auto-migration with B-tree indexes (`idx_isbn`, `idx_cote`, `idx_format`, `idx_categorie`) to ensure fast searches and filtering.
-- **Integrated Multi-Format Reader & Viewer**:
-  - In-browser modal viewer interface for direct previewing and reading of stored digital books.
-- **Modern & Responsive UI (Tailwind CSS & FontAwesome)**:
-  - Retractable/collapsible sidebar for adding and editing entries.
-  - Real-time header dashboard displaying catalog statistics (total book count and format breakdown for PDF, EPUB, MOBI).
-- **Search Engine, Filtering & Pagination**:
-  - Global search combining title, author, ISBN, and library shelf mark (cote).
-  - Combined filters by format (`PDF`, `EPUB`, `MOBI`) and category.
-  - Dynamic pagination set to 15 records per page with query parameter preservation.
+BiblioTech is a monolithic, single-file PHP digital library management system for organizing, indexing, and viewing digital publications (PDF, EPUB, MOBI).
 
 ---
 
-## 🛠️ Tech Stack
+## Key Features
 
-- **Backend**: PHP 7.4+ (PDO MySQL, Stream Context, `finfo`, Internal JSON API)
-- **Database**: MySQL / MariaDB (auto-creates the `livres` table with optimized indexes upon initial run)
-- **Frontend**: HTML5, JavaScript ES6 (Fetch API, DOM manipulation), Tailwind CSS (CDN), FontAwesome 6
-- **Storage & Security**: Local filesystem (`uploads/books/`) with `.htaccess` execution control, MIME-type validation, and path traversal checks
+- **Centralized Single-File Architecture (`index.php`)**: Complete routing, controller logic, database persistence, and presentation in one file.
+- **Auto-Migration Database Layer**: Automatically initializes table schemas and indexes (`idx_isbn`, `idx_cote`, `idx_format`, `idx_categorie`) on first load via PDO.
+- **ISBN Auto-Enrichment**: Asynchronous lookup using Google Books API with automatic fallback to Open Library API.
+- **Integrated Reader Modal**: Direct in-browser viewing for PDF documents and a download fallback interface for EPUB and MOBI formats.
+- **Security-First File Handling**:
+  - MIME-type validation via PHP `finfo` (`fileinfo` extension).
+  - Anti-directory traversal path verification using `realpath()`.
+  - Cryptographically secure random filenames (`bin2hex(random_bytes(16))`).
+  - XSS sanitization (`htmlspecialchars` helper).
+- **Responsive Interface**: Built with Tailwind CSS and FontAwesome, featuring a collapsible side drawer and structured catalog filters.
 
 ---
 
-## 📁 Directory Structure
+## Requirements
 
-```text
-.
-├── index.php           # Monolithic Application (AJAX API, PHP Controller, Frontend UI)
-├── README.md           # Project Documentation
+- **PHP**: 8.0 or higher (with `pdo_mysql` and `fileinfo` extensions enabled)
+- **Database**: MariaDB 10.4+ or MySQL 8.0+
+- **Web Server**: Apache / Nginx or built-in PHP development server
+- **Internet Access**: Required for Tailwind CSS CDN, FontAwesome, and ISBN API lookups.
+
+---
+
+## Database Configuration
+
+Update the credentials in the centralized configuration block at the top of `index.php`:
+
+```php
+define('DB_HOST', 'localhost');
+define('DB_NAME', 'bibliotheque_db');
+define('DB_USER', 'root');
+define('DB_PASS', 'root');
+define('DB_CHARSET', 'utf8mb4');
+
+The application automatically creates the livres table if it does not exist:
+
+CREATE TABLE IF NOT EXISTS livres (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    titre VARCHAR(255) NOT NULL,
+    auteur VARCHAR(255) NOT NULL,
+    isbn VARCHAR(50) DEFAULT NULL,
+    cote VARCHAR(50) DEFAULT NULL,
+    editeur VARCHAR(100) DEFAULT NULL,
+    annee INT DEFAULT NULL,
+    format VARCHAR(10) NOT NULL,
+    categorie VARCHAR(100) NOT NULL,
+    pages INT DEFAULT NULL,
+    resume TEXT DEFAULT NULL,
+    fichier VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_isbn (isbn),
+    INDEX idx_cote (cote),
+    INDEX idx_format (format),
+    INDEX idx_categorie (categorie)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+Installation & Running Locally
+
+1. Clone or copy the files:
+Place index.php into your local web server root directory (e.g., htdocs, www, or Laragon public folder).
+
+2. Create the database:
+Create a database matching your DB_NAME setting (e.g., bibliotheque_db):
+
+CREATE DATABASE bibliotheque_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+3. Start the server:
+Using PHP's built-in server:
+
+php -S localhost:8000
+
+Or access it through your local stack (XAMPP, Laragon, etc.).
+
+4. Directory permissions:
+Ensure the script has write permissions to create the target uploads folder (uploads/books/).
+
+Application Structure
+
+├── index.php           # Core application file (Configuration, Logic, UI, Reader Modal)
 └── uploads/
-    └── books/          # Secure directory for uploaded book files
-        └── .htaccess   # Apache access control policy preventing PHP execution
+    └── books/          # Directory where uploaded eBook files are safely stored
+
+
+Roadmap
+
+x] Step 1: Core CRUD & File Upload Engine
+
+[x] Step 2: ISBN Lookup Integration (Google Books + Open Library APIs)
+
+[x] Step 3: UI Overhaul with Tailwind CSS & Responsive Layout
+
+[x] Step 4: Integrated In-Browser Viewer & Reader Modal
+
+[ ] Step 5: Full-Text Content Indexing & Client-Side EPUB Reader Integration (ePub.js)
+
