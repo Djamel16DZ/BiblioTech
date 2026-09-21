@@ -1,6 +1,15 @@
 <?php
 // ==========================================
-// API INTERNE DE RECHERCHE ISBN (AJAX PHP)
+// 1. CONFIGURATION CENTRALISEE
+// ==========================================
+define('DB_HOST', 'localhost');
+define('DB_NAME', 'bibliotheque_db');
+define('DB_USER', 'root');
+define('DB_PASS', 'root');
+define('DB_CHARSET', 'utf8mb4');
+
+// ==========================================
+// 2. API INTERNE DE RECHERCHE ISBN (AJAX PHP)
 // ==========================================
 if (isset($_GET['ajax_isbn'])) {
     header('Content-Type: application/json');
@@ -82,15 +91,9 @@ if (isset($_GET['ajax_isbn'])) {
 }
 
 // ==========================================
-// CONFIGURATION & CONNEXION BASE DE DONNÉES
+// 3. CONNEXION BASE DE DONNÉES & AUTO-MIGRATION
 // ==========================================
-$host = 'localhost';
-$db   = 'bibliotheque_db';
-$user = 'root';
-$pass = 'root';
-$charset = 'utf8mb4';
-
-$dsn = "mysql:host=$host;dbname=$db;charset=$charset";
+$dsn = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
 $options = [
     PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
     PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
@@ -98,11 +101,12 @@ $options = [
 ];
 
 try {
-    $pdo = new PDO($dsn, $user, $pass, $options);
+    $pdo = new PDO($dsn, DB_USER, DB_PASS, $options);
 } catch (\PDOException $e) {
     die("Erreur de connexion à la base de données : " . $e->getMessage());
 }
 
+// Création de la table avec index de performance
 $pdo->exec("CREATE TABLE IF NOT EXISTS livres (
     id INT AUTO_INCREMENT PRIMARY KEY,
     titre VARCHAR(255) NOT NULL,
@@ -116,8 +120,12 @@ $pdo->exec("CREATE TABLE IF NOT EXISTS livres (
     pages INT DEFAULT NULL,
     resume TEXT DEFAULT NULL,
     fichier VARCHAR(255) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-)");
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_isbn (isbn),
+    INDEX idx_cote (cote),
+    INDEX idx_format (format),
+    INDEX idx_categorie (categorie)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
 $uploadDir = 'uploads/books/';
 if (!is_dir($uploadDir)) {
@@ -125,7 +133,7 @@ if (!is_dir($uploadDir)) {
 }
 
 // ==========================================
-// TRAITEMENT DES REQUÊTES (POST / GET)
+// 4. TRAITEMENT DES REQUÊTES (POST / GET)
 // ==========================================
 $error = '';
 
@@ -137,7 +145,6 @@ if (isset($_GET['action']) && $_GET['action'] == 'delete' && isset($_GET['id']))
     
     if ($livre) {
         $filePath = $livre['fichier'];
-        // Empêcher la traversée de répertoire
         if (strpos(realpath($filePath), realpath($uploadDir)) === 0 && file_exists($filePath)) {
             unlink($filePath);
         }
@@ -171,14 +178,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $fileExtension = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
         $allowedExtensions = ['pdf', 'epub', 'mobi'];
 
-        // Table de correspondance MIME
         $allowedMimes = [
             'pdf'  => ['application/pdf', 'application/x-pdf'],
             'epub' => ['application/epub+zip'],
             'mobi' => ['application/x-mobipocket-ebook', 'application/octet-stream', 'application/x-mobi']
         ];
 
-        // Validation MIME avec FileInfo
         $finfo = new finfo(FILEINFO_MIME_TYPE);
         $detectedMime = $finfo->file($fileTmpPath);
 
@@ -235,7 +240,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // ==========================================
-// RÉCUPÉRATION DES DONNÉES & FILTRES
+// 5. RÉCUPÉRATION DES DONNÉES & FILTRES
 // ==========================================
 $search = $_GET['search'] ?? '';
 $filterFormat = $_GET['format'] ?? '';

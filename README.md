@@ -17,6 +17,9 @@ BiblioTech is a lightweight, intuitive monolithic web application built with PHP
 - **Security & Upload Protection**:
   - Direct execution protection on storage folders using Apache access controls (`.htaccess`).
   - Restricts access in sensitive storage locations to safe document formats while blocking web execution scripts (PHP, CGI, etc.).
+- **Optimized Database & Centralized Config**:
+  - Centralized connection constants (`DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASS`, `DB_CHARSET`) for easy configuration.
+  - Database table auto-migration with B-tree indexes (`idx_isbn`, `idx_cote`, `idx_format`, `idx_categorie`) to ensure fast searches and filtering.
 - **Integrated Multi-Format Reader & Viewer**:
   - In-browser modal viewer interface for direct previewing and reading of stored digital books.
 - **Modern & Responsive UI (Tailwind CSS & FontAwesome)**:
@@ -32,7 +35,7 @@ BiblioTech is a lightweight, intuitive monolithic web application built with PHP
 ## 🛠️ Tech Stack
 
 - **Backend**: PHP 7.4+ (PDO MySQL, Stream Context, Internal JSON API)
-- **Database**: MySQL / MariaDB (auto-creates the `livres` table upon initial run)
+- **Database**: MySQL / MariaDB (auto-creates the `livres` table with optimized indexes upon initial run)
 - **Frontend**: HTML5, JavaScript ES6 (Fetch API, DOM manipulation), Tailwind CSS (CDN), FontAwesome 6
 - **Storage & Security**: Local filesystem (`uploads/books/`) with `.htaccess` execution control and directory initialization
 
