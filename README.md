@@ -11,22 +11,31 @@ BiblioTech is a monolithic, single-file PHP digital library management system fo
 * **Auto-Migration Database Layer**
 
   * Automatically initializes the required database schema and indexes on first load using PDO.
-  * Includes indexes for:
+  * Includes standard and full-text indexes for:
 
     * `idx_isbn`
     * `idx_cote`
     * `idx_format`
     * `idx_categorie`
+    * `ft_livres_search` — `FULLTEXT` index across `titre`, `auteur`, `resume`, and `contenu_texte`
+
+* **Full-Text Content Indexing**
+
+  * Automatically extracts text content from uploaded books for searchable catalog indexing.
+  * Stores extracted content in the `contenu_texte` database field.
+  * Uses MySQL/MariaDB `FULLTEXT` search capabilities for deep catalog queries across metadata and extracted book content.
 
 * **ISBN Auto-Enrichment**
 
   * Asynchronous ISBN lookup using the **Google Books API**.
   * Automatic fallback to the **Open Library API**.
 
-* **Integrated Reader Modal**
+* **Integrated Multi-Format Reader Modal**
 
-  * Direct in-browser viewing for PDF documents.
-  * Download fallback interface for EPUB and MOBI formats.
+  * Native in-browser PDF viewing through an embedded object viewer.
+  * Interactive client-side EPUB reading powered by **ePub.js**.
+  * Supports EPUB pagination, chapter navigation, and font controls.
+  * Direct download fallback interface for MOBI formats.
 
 * **Security-First File Handling**
 
@@ -40,6 +49,7 @@ BiblioTech is a monolithic, single-file PHP digital library management system fo
   * Built with **Tailwind CSS** and **Font Awesome**.
   * Collapsible side drawer.
   * Structured catalog filters.
+  * Full-text search input.
   * Responsive layout for desktop and mobile devices.
 
 ---
@@ -48,13 +58,13 @@ BiblioTech is a monolithic, single-file PHP digital library management system fo
 
 Before installing BiblioTech, make sure your environment meets the following requirements:
 
-| Requirement         | Version / Details                                                 |
-| ------------------- | ----------------------------------------------------------------- |
-| **PHP**             | 8.0 or higher                                                     |
-| **PHP Extensions**  | `pdo_mysql`, `fileinfo`                                           |
-| **Database**        | MariaDB 10.4+ or MySQL 8.0+                                       |
-| **Web Server**      | Apache, Nginx, or PHP built-in development server                 |
-| **Internet Access** | Required for Tailwind CSS CDN, Font Awesome, and ISBN API lookups |
+| Requirement         | Version / Details                                                          |
+| ------------------- | -------------------------------------------------------------------------- |
+| **PHP**             | 8.0 or higher                                                              |
+| **PHP Extensions**  | `pdo_mysql`, `fileinfo`, `zip` recommended for EPUB parsing                |
+| **Database**        | MariaDB 10.4+ or MySQL 8.0+ with InnoDB `FULLTEXT` support                 |
+| **Web Server**      | Apache, Nginx, or PHP built-in development server                          |
+| **Internet Access** | Required for Tailwind CSS, Font Awesome, ePub.js CDN, and ISBN API lookups |
 
 ---
 
@@ -91,17 +101,27 @@ CREATE TABLE IF NOT EXISTS livres (
     categorie VARCHAR(100) NOT NULL,
     pages INT DEFAULT NULL,
     resume TEXT DEFAULT NULL,
+    contenu_texte LONGTEXT DEFAULT NULL,
     fichier VARCHAR(255) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
     INDEX idx_isbn (isbn),
     INDEX idx_cote (cote),
     INDEX idx_format (format),
-    INDEX idx_categorie (categorie)
+    INDEX idx_categorie (categorie),
+
+    FULLTEXT INDEX ft_livres_search (
+        titre,
+        auteur,
+        resume,
+        contenu_texte
+    )
 ) ENGINE=InnoDB
 DEFAULT CHARSET=utf8mb4
 COLLATE=utf8mb4_unicode_ci;
 ```
+
+> **Note:** The `contenu_texte` field stores extracted textual content from supported uploaded documents and is included in the `FULLTEXT` index used by the catalog search functionality.
 
 ---
 
@@ -136,7 +156,7 @@ CHARACTER SET utf8mb4
 COLLATE utf8mb4_unicode_ci;
 ```
 
-The application will automatically create the required tables and indexes.
+The application will automatically create the required tables, columns, and indexes on first execution.
 
 ---
 
@@ -193,16 +213,16 @@ BiblioTech implements several safeguards for uploaded files and user-provided da
 * Protection against directory traversal using `realpath()`.
 * Randomized filenames generated with `random_bytes()`.
 * HTML output escaping using `htmlspecialchars()`.
-* Database access through PDO.
-* Indexed database fields for efficient catalog searches.
+* Prepared statements for database operations through PDO.
+* Indexed and full-text database fields for efficient catalog searches.
 
 These measures are intended to reduce common risks associated with file uploads and user-generated content.
 
 ---
 
-## External Services
+## External Services & Libraries
 
-BiblioTech currently relies on the following external resources:
+BiblioTech currently relies on the following external resources and libraries.
 
 ### Google Books API
 
@@ -212,6 +232,14 @@ Used for ISBN-based book metadata enrichment.
 
 Used as a fallback when Google Books does not return sufficient information.
 
+### ePub.js
+
+Used for client-side EPUB rendering and interactive reading inside the reader modal, including pagination and navigation.
+
+### JSZip
+
+Used as part of the EPUB processing/rendering stack required by the client-side reader.
+
 ### Tailwind CSS
 
 Loaded through the Tailwind CSS CDN for the application interface.
@@ -220,7 +248,7 @@ Loaded through the Tailwind CSS CDN for the application interface.
 
 Used for interface icons.
 
-> Internet access is therefore required for the full feature set. Core database and file-management functionality can still operate locally once the application is installed.
+> **Note:** Internet access is required for the full feature set when these resources are loaded from their respective CDNs or APIs. Core database operations and local file management can continue to operate locally once the application is installed.
 
 ---
 
@@ -230,12 +258,24 @@ Used for interface icons.
 * [x] **Step 2:** ISBN Lookup Integration (Google Books + Open Library APIs)
 * [x] **Step 3:** UI Overhaul with Tailwind CSS & Responsive Layout
 * [x] **Step 4:** Integrated In-Browser Viewer & Reader Modal
-* [ ] **Step 5:** Full-Text Content Indexing & Client-Side EPUB Reader Integration (`ePub.js`)
+* [x] **Step 5:** Full-Text Content Indexing & Client-Side EPUB Reader Integration (`ePub.js`)
 
 ---
 
 ## Project Status
 
-**Current status:** MVP / Active Development
+**Current status:** Feature Complete / Active Maintenance
 
-BiblioTech is currently designed as a lightweight digital library application with a deliberately simple architecture. Future development may introduce additional modularization as the feature set grows.
+BiblioTech has fulfilled its core single-file MVP feature set, including:
+
+* Digital library catalog management
+* Secure PDF, EPUB, and MOBI file handling
+* ISBN-based metadata enrichment
+* Full-text content extraction and indexing
+* MySQL/MariaDB `FULLTEXT` search
+* In-browser PDF viewing
+* Client-side EPUB rendering with `ePub.js`
+* Interactive EPUB navigation and reading controls
+* Responsive catalog interface
+
+The project is now in **active maintenance**, with future development focused on improvements, optimization, compatibility, security, and additional functionality rather than the completion of the original MVP roadmap.
