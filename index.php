@@ -121,7 +121,7 @@ $pdo->exec("CREATE TABLE IF NOT EXISTS livres (
 
 $uploadDir = 'uploads/books/';
 if (!is_dir($uploadDir)) {
-    mkdir($uploadDir, 0777, true);
+    mkdir($uploadDir, 0755, true);
 }
 
 // ==========================================
@@ -136,8 +136,10 @@ if (isset($_GET['action']) && $_GET['action'] == 'delete' && isset($_GET['id']))
     $livre = $stmt->fetch();
     
     if ($livre) {
-        if (file_exists($livre['fichier'])) {
-            unlink($livre['fichier']);
+        $filePath = $livre['fichier'];
+        // Empêcher la traversée de répertoire
+        if (strpos(realpath($filePath), realpath($uploadDir)) === 0 && file_exists($filePath)) {
+            unlink($filePath);
         }
         $stmtDel = $pdo->prepare("DELETE FROM livres WHERE id = ?");
         $stmtDel->execute([$id]);
@@ -169,8 +171,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $fileExtension = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
         $allowedExtensions = ['pdf', 'epub', 'mobi'];
 
-        if (in_array($fileExtension, $allowedExtensions)) {
-            $newFileName = md5(time() . $fileName) . '.' . $fileExtension;
+        // Table de correspondance MIME
+        $allowedMimes = [
+            'pdf'  => ['application/pdf', 'application/x-pdf'],
+            'epub' => ['application/epub+zip'],
+            'mobi' => ['application/x-mobipocket-ebook', 'application/octet-stream', 'application/x-mobi']
+        ];
+
+        // Validation MIME avec FileInfo
+        $finfo = new finfo(FILEINFO_MIME_TYPE);
+        $detectedMime = $finfo->file($fileTmpPath);
+
+        if (in_array($fileExtension, $allowedExtensions) && isset($allowedMimes[$fileExtension]) && in_array($detectedMime, $allowedMimes[$fileExtension])) {
+            $newFileName = md5(bin2hex(random_bytes(8)) . time() . $fileName) . '.' . $fileExtension;
             $dest_path = $uploadDir . $newFileName;
 
             if (move_uploaded_file($fileTmpPath, $dest_path)) {
@@ -180,7 +193,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $error = "Erreur lors du déplacement du fichier téléchargé.";
             }
         } else {
-            $error = "Format de fichier non autorisé. Formats acceptés : PDF, EPUB, MOBI.";
+            $error = "Fichier invalide ou format non autorisé. Formats acceptés : PDF, EPUB, MOBI.";
         }
     }
 
@@ -196,7 +209,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute([$id]);
                 $oldData = $stmt->fetch();
                 if ($oldData && file_exists($oldData['fichier'])) {
-                    unlink($oldData['fichier']);
+                    if (strpos(realpath($oldData['fichier']), realpath($uploadDir)) === 0) {
+                        unlink($oldData['fichier']);
+                    }
                 }
             }
 
@@ -305,17 +320,6 @@ if (isset($_GET['edit'])) {
             opacity: 0;
             pointer-events: none;
         }
-        #mobiContainer img {
-            max-width: 100%;
-            height: auto;
-            margin: 1rem auto;
-            display: block;
-        }
-        #epubViewer iframe {
-            width: 100% !important;
-            height: 100% !important;
-            border: none;
-        }
     </style>
 </head>
 <body class="bg-gray-50 h-screen flex flex-col overflow-hidden text-gray-800">
@@ -323,7 +327,7 @@ if (isset($_GET['edit'])) {
     <!-- En-tête / Header -->
     <header class="bg-white border-b border-gray-200 h-16 flex items-center justify-between px-6 shrink-0 z-20">
         <div class="flex items-center space-x-4">
-            <button id="sidebarToggle" class="text-gray-500 hover:text-indigo-600 focus:outline-none transition-colors" title="Ouvrir / Fermer le panneau">
+            <button id="sidebarToggle" onclick="toggleSidebar()" class="text-gray-500 hover:text-indigo-600 focus:outline-none transition-colors" title="Ouvrir / Fermer le panneau">
                 <i class="fa-solid fa-bars text-xl"></i>
             </button>
             <div class="flex items-center space-x-2">
@@ -385,7 +389,7 @@ if (isset($_GET['edit'])) {
             <div class="flex-1 overflow-y-auto p-4 space-y-4">
                 <?php if (!empty($error)): ?>
                     <div class="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg text-xs">
-                        <?= $error ?>
+                        <?= htmlspecialchars($error) ?>
                     </div>
                 <?php endif; ?>
 
@@ -555,9 +559,9 @@ if (isset($_GET['edit'])) {
                                             <?= htmlspecialchars($l['isbn'] ?: '-') ?>
                                         </td>
                                         <td class="p-3 text-right space-x-2 whitespace-nowrap">
-                                            <button onclick="openPreview('<?= htmlspecialchars($l['fichier']) ?>', '<?= htmlspecialchars(addslashes($l['titre'])) ?>', '<?= $l['format'] ?>')" class="text-gray-500 hover:text-indigo-600 transition" title="Prévisualiser / Lire">
+                                            <a href="<?= htmlspecialchars($l['fichier']) ?>" target="_blank" class="text-gray-500 hover:text-indigo-600 transition" title="Ouvrir le fichier">
                                                 <i class="fa-solid fa-eye text-sm"></i>
-                                            </button>
+                                            </a>
                                             <a href="<?= htmlspecialchars($l['fichier']) ?>" download class="text-gray-500 hover:text-emerald-600 transition" title="Télécharger">
                                                 <i class="fa-solid fa-download text-sm"></i>
                                             </a>
@@ -596,7 +600,7 @@ if (isset($_GET['edit'])) {
                             <?php endif; ?>
 
                             <?php for ($i = 1; $i <= $totalPages; $i++): ?>
-                                <a href="index.php?page=<?= $i ?><?= $paramPrefix ?>" class="px-3 py-1.5 rounded-lg border transition <?= $i === $page ? 'bg-indigo-600 border-indigo-600 text-white font-semibold' : 'bg-gray-50 border-gray-300 text-gray-700 hover:bg-gray-100' ?>">
+                                <a href="index.php?page=<?= $i ?><?= $paramPrefix ?>" class="px-3 py-1.5 rounded-lg border <?= $i === $page ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-gray-50 border-gray-300 text-gray-700 hover:bg-gray-100' ?> transition">
                                     <?= $i ?>
                                 </a>
                             <?php endfor; ?>
@@ -613,77 +617,39 @@ if (isset($_GET['edit'])) {
         </main>
     </div>
 
-    <!-- Modal de Prévisualisation -->
-    <div id="previewModal" class="fixed inset-0 z-50 hidden bg-gray-900/75 backdrop-blur-sm flex items-center justify-center p-4 sm:p-6">
-        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-6xl h-[90vh] flex flex-col overflow-hidden relative">
-            
-            <div class="px-6 py-4 border-b border-gray-200 flex items-center justify-between bg-gray-50 shrink-0">
-                <div class="flex items-center space-x-3 overflow-hidden">
-                    <i class="fa-solid fa-book-reader text-indigo-600 text-lg shrink-0"></i>
-                    <h3 id="modalTitle" class="text-base font-semibold text-gray-900 truncate">Prévisualisation Document</h3>
-                </div>
-                <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 hover:bg-gray-200 p-2 rounded-lg transition-colors">
-                    <i class="fa-solid fa-xmark text-xl"></i>
-                </button>
-            </div>
-
-            <div id="modalBody" class="flex-1 relative bg-gray-100 overflow-hidden">
-                <!-- Direct Reader Container -->
-            </div>
-
-        </div>
-    </div>
-
-    <!-- EPUB & MOBI Reader Libraries -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js"></script>
-
-    <script type="module">
-        import { toMarkdown } from 'https://cdn.jsdelivr.net/npm/@mdgate/mobi@0.6.25/+esm';
-        window.mobiToMarkdown = toMarkdown;
-    </script>
-
+    <!-- JavaScript Application Logic -->
     <script>
-        // Sidebar Management
-        const sidebar = document.getElementById('sidebar');
-        const sidebarToggle = document.getElementById('sidebarToggle');
-
         function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
             sidebar.classList.toggle('collapsed');
         }
 
         function openNewBookPanel() {
+            const sidebar = document.getElementById('sidebar');
             if (sidebar.classList.contains('collapsed')) {
                 sidebar.classList.remove('collapsed');
             }
         }
 
-        if (sidebarToggle) {
-            sidebarToggle.addEventListener('click', toggleSidebar);
-        }
-
-        // ISBN Auto-Fetch
         async function fetchBookByISBN() {
             const isbnInput = document.getElementById('isbnInput');
             const statusSpan = document.getElementById('isbnStatus');
-            const btn = document.getElementById('isbnBtn');
             const isbn = isbnInput.value.trim();
 
             if (!isbn) {
-                statusSpan.textContent = 'Veuillez saisir un ISBN.';
-                statusSpan.className = 'text-[10px] text-red-500 mt-0.5 block';
+                statusSpan.textContent = "Veuillez entrer un numéro ISBN.";
+                statusSpan.className = "text-[10px] text-red-500 mt-0.5 block";
                 return;
             }
 
-            statusSpan.textContent = 'Recherche en cours...';
-            statusSpan.className = 'text-[10px] text-indigo-600 mt-0.5 block';
-            btn.disabled = true;
+            statusSpan.textContent = "Recherche en cours...";
+            statusSpan.className = "text-[10px] text-indigo-600 mt-0.5 block";
 
             try {
                 const response = await fetch(`index.php?ajax_isbn=${encodeURIComponent(isbn)}`);
                 const result = await response.json();
 
-                if (result.success) {
+                if (result.success && result.data) {
                     const data = result.data;
                     if (data.titre) document.getElementById('titreInput').value = data.titre;
                     if (data.auteur) document.getElementById('auteurInput').value = data.auteur;
@@ -692,220 +658,17 @@ if (isset($_GET['edit'])) {
                     if (data.pages) document.getElementById('pagesInput').value = data.pages;
                     if (data.resume) document.getElementById('resumeInput').value = data.resume;
 
-                    statusSpan.textContent = 'Champs remplis avec succès !';
-                    statusSpan.className = 'text-[10px] text-emerald-600 mt-0.5 block';
+                    statusSpan.textContent = "Données récupérées avec succès !";
+                    statusSpan.className = "text-[10px] text-emerald-600 mt-0.5 block";
                 } else {
-                    statusSpan.textContent = result.error || 'Livre introuvable.';
-                    statusSpan.className = 'text-[10px] text-red-500 mt-0.5 block';
+                    statusSpan.textContent = result.error || "Aucune information trouvée.";
+                    statusSpan.className = "text-[10px] text-red-500 mt-0.5 block";
                 }
             } catch (err) {
-                console.error(err);
-                statusSpan.textContent = 'Erreur lors de la récupération.';
-                statusSpan.className = 'text-[10px] text-red-500 mt-0.5 block';
-            } finally {
-                btn.disabled = false;
+                statusSpan.textContent = "Erreur de connexion lors de la recherche.";
+                statusSpan.className = "text-[10px] text-red-500 mt-0.5 block";
             }
         }
-
-        // Unified Preview Engine (PDF, EPUB, MOBI)
-        let currentRendition = null;
-
-        async function openPreview(filePath, title, format) {
-            const modal = document.getElementById('previewModal');
-            const modalTitle = document.getElementById('modalTitle');
-            const modalBody = document.getElementById('modalBody');
-
-            modalTitle.innerText = `${title} (${format})`;
-            modalBody.innerHTML = '';
-            modal.classList.remove('hidden');
-
-            const fmt = format.toUpperCase();
-
-            if (fmt === 'PDF') {
-                modalBody.innerHTML = `<iframe src="${filePath}" class="w-full h-full border-none"></iframe>`;
-            } 
-            else if (fmt === 'EPUB') {
-                modalBody.innerHTML = `
-                    <div id="epubViewer" class="w-full h-full overflow-hidden bg-white"></div>
-                    <button id="prevBtn" class="absolute left-4 top-1/2 -translate-y-1/2 bg-black/50 text-white p-3 rounded-full hover:bg-black/70 z-10 transition-colors">
-                        <i class="fa-solid fa-chevron-left text-lg"></i>
-                    </button>
-                    <button id="nextBtn" class="absolute right-4 top-1/2 -translate-y-1/2 bg-black/50 text-white p-3 rounded-full hover:bg-black/70 z-10 transition-colors">
-                        <i class="fa-solid fa-chevron-right text-lg"></i>
-                    </button>
-                `;
-
-                try {
-                    const book = ePub(filePath);
-                    currentRendition = book.renderTo("epubViewer", {
-                        width: "100%",
-                        height: "100%",
-                        spread: "always"
-                    });
-                    await currentRendition.display();
-
-                    document.getElementById('prevBtn').onclick = () => currentRendition.prev();
-                    document.getElementById('nextBtn').onclick = () => currentRendition.next();
-                } catch (e) {
-                    console.error("EPUB Parse Error:", e);
-                    showError(modalBody, fmt, filePath);
-                }
-            } 
-            else if (fmt === 'MOBI') {
-                modalBody.innerHTML = `
-                    <div id="mobiContainer" class="w-full h-full overflow-y-auto p-8 bg-white text-gray-900 font-sans leading-relaxed max-w-4xl mx-auto shadow-sm">
-                        <div class="flex items-center justify-center h-full text-gray-400 space-x-3">
-                            <i class="fa-solid fa-circle-notch fa-spin text-2xl text-indigo-600"></i>
-                            <span class="text-sm font-medium text-gray-600">Décodage du fichier MOBI en cours...</span>
-                        </div>
-                    </div>`;
-                
-                try {
-                    const response = await fetch(filePath);
-                    if (!response.ok) throw new Error('Erreur HTTP ' + response.status);
-                    
-                    const buffer = await response.arrayBuffer();
-                    const bytes = new Uint8Array(buffer);
-                    const mobiContainer = document.getElementById('mobiContainer');
-
-                    // Primary Method: ESM @mdgate/mobi binary parser
-                    if (typeof window.mobiToMarkdown === 'function') {
-                        try {
-                            const markdown = await window.mobiToMarkdown(bytes);
-                            if (markdown && markdown.trim().length > 0) {
-                                const html = markdown
-                                    .replace(/^### (.*$)/gim, '<h3 class="text-lg font-bold my-2">$1</h3>')
-                                    .replace(/^## (.*$)/gim, '<h2 class="text-xl font-bold my-3">$1</h2>')
-                                    .replace(/^# (.*$)/gim, '<h1 class="text-2xl font-bold my-4">$1</h1>')
-                                    .replace(/\n\n/g, '</p><p class="my-3">');
-                                
-                                mobiContainer.innerHTML = `<article class="prose max-w-none"><p class="my-3">${html}</p></article>`;
-                                return;
-                            }
-                        } catch (mobiErr) {
-                            console.warn("Échec du parseur mdgate, tentative via extraction PalmDOC...", mobiErr);
-                        }
-                    }
-
-                    // Fallback Method: Native PalmDOC LZ77 Binary Decompressor
-                    const extractedText = decompressPalmDoc(bytes);
-                    if (extractedText && extractedText.trim().length > 0) {
-                        const cleanHtml = sanitizeMobiContent(extractedText);
-                        mobiContainer.innerHTML = `<div class="mobi-content prose max-w-none">${cleanHtml}</div>`;
-                    } else {
-                        throw new Error("Impossible de décompresser le contenu du fichier MOBI.");
-                    }
-                } catch (e) {
-                    console.error("MOBI Extraction Error:", e);
-                    showError(modalBody, fmt, filePath);
-                }
-            } 
-            else {
-                modalBody.innerHTML = `
-                    <div class="flex flex-col items-center justify-center h-full text-gray-500">
-                        <i class="fa-solid fa-file-circle-exclamation text-4xl mb-2 text-amber-500"></i>
-                        <p class="text-sm">Format non supporté pour la prévisualisation directe.</p>
-                    </div>`;
-            }
-        }
-
-        // Binary Decompressor for PalmDOC / MOBI LZ77 streams
-        function decompressPalmDoc(bytes) {
-            try {
-                const view = new DataView(bytes.buffer);
-                const numRecords = view.getUint16(76);
-                if (numRecords === 0) return '';
-
-                let textResult = '';
-                const decoder = new TextDecoder('latin1');
-
-                for (let i = 1; i <= Math.min(numRecords, 200); i++) {
-                    const offset = view.getUint32(78 + (i - 1) * 8);
-                    const nextOffset = (i < numRecords) ? view.getUint32(78 + i * 8) : bytes.length;
-                    
-                    if (offset >= bytes.length) break;
-
-                    const recordBytes = bytes.subarray(offset, Math.min(nextOffset, bytes.length));
-                    let pos = 0;
-                    let decompressed = [];
-
-                    while (pos < recordBytes.length) {
-                        const byte = recordBytes[pos++];
-                        if (byte === 0) {
-                            decompressed.push(0);
-                        } else if (byte >= 1 && byte <= 8) {
-                            for (let j = 0; j < byte && pos < recordBytes.length; j++) {
-                                decompressed.push(recordBytes[pos++]);
-                            }
-                        } else if (byte <= 0x7F) {
-                            decompressed.push(byte);
-                        } else if (byte >= 0xC0) {
-                            decompressed.push(32);
-                            decompressed.push(byte ^ 0x80);
-                        } else if (byte >= 0x80 && byte <= 0xBF) {
-                            if (pos >= recordBytes.length) break;
-                            const next = recordBytes[pos++];
-                            const distance = (((byte << 8) | next) >> 3) & 0x07FF;
-                            const length = (next & 0x07) + 3;
-                            for (let l = 0; l < length; l++) {
-                                const backIdx = decompressed.length - distance;
-                                if (backIdx >= 0) decompressed.push(decompressed[backIdx]);
-                            }
-                        }
-                    }
-                    textResult += decoder.decode(new Uint8Array(decompressed));
-                }
-                return textResult;
-            } catch (err) {
-                console.error("PalmDOC Decompress error:", err);
-                return '';
-            }
-        }
-
-        function sanitizeMobiContent(rawText) {
-            const htmlMatch = rawText.match(/<html[\s\S]*?>([\s\S]*?)<\/html>/i) || 
-                              rawText.match(/<body[\s\S]*?>([\s\S]*?)<\/body>/i);
-            
-            let content = htmlMatch ? htmlMatch[1] : rawText;
-            content = content.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '');
-            
-            if (!/<[a-z][\s\S]*>/i.test(content)) {
-                content = content.replace(/\n\n/g, '</p><p class="my-2">');
-                content = `<p>${content}</p>`;
-            }
-            return content;
-        }
-
-        function showError(container, format, filePath) {
-            container.innerHTML = `
-                <div class="flex flex-col items-center justify-center h-full bg-white p-8 text-center">
-                    <div class="w-16 h-16 bg-red-100 text-red-500 rounded-full flex items-center justify-center mb-4">
-                        <i class="fa-solid fa-triangle-exclamation text-2xl"></i>
-                    </div>
-                    <h4 class="text-lg font-semibold text-gray-900 mb-1">Impossible de charger le fichier ${format}</h4>
-                    <p class="text-sm text-gray-500 max-w-md mb-6">Ce fichier MOBI utilise peut-être un chiffrement DRM (Kindle) ou un dictionnaire HUFF/CDIC propriétaire non pris en compte.</p>
-                    <a href="${filePath}" download class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-medium transition-colors">
-                        <i class="fa-solid fa-download mr-2"></i> Télécharger le fichier
-                    </a>
-                </div>`;
-        }
-
-        function closeModal() {
-            const modal = document.getElementById('previewModal');
-            const modalBody = document.getElementById('modalBody');
-            
-            modal.classList.add('hidden');
-            modalBody.innerHTML = '';
-            
-            if (currentRendition) {
-                currentRendition.destroy();
-                currentRendition = null;
-            }
-        }
-
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') closeModal();
-        });
     </script>
 </body>
 </html>
