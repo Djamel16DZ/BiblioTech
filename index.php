@@ -1,7 +1,7 @@
 <?php
 /**
  * BiblioTech - Full-Stack Digital Library Application (Single-File PHP / MariaDB)
- * Complete Implementation: Steps 1 through 5
+ * Fully Corrected & Hardened Implementation
  */
 
 // -----------------------------------------------------------------------------
@@ -29,7 +29,7 @@ try {
     ];
     $pdo = new PDO($dsn, DB_USER, DB_PASS, $options);
 
-    // Auto-create table if not existing
+    // Auto-create table with FULLTEXT index
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS livres (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -49,7 +49,8 @@ try {
             INDEX idx_isbn (isbn),
             INDEX idx_cote (cote),
             INDEX idx_format (format),
-            INDEX idx_categorie (categorie)
+            INDEX idx_categorie (categorie),
+            FULLTEXT INDEX ft_search (titre, auteur, resume, fulltext_content)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     ");
 } catch (\PDOException $e) {
@@ -61,10 +62,36 @@ try {
 // -----------------------------------------------------------------------------
 
 /**
+ * Robust HTTP GET helper with cURL fallback when allow_url_fopen is disabled.
+ */
+function fetchUrl(string $url) {
+    if (ini_get('allow_url_fopen')) {
+        return @file_get_contents($url);
+    } elseif (function_exists('curl_version')) {
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        $data = curl_exec($ch);
+        curl_close($ch);
+        return $data;
+    }
+    return false;
+}
+
+/**
  * Extracts raw uncompressed text streams from uploaded PDF files.
+ * Protects against memory exhaustion by enforcing a size safety cap.
  */
 function extractTextFromPdf(string $filePath): string {
     if (!file_exists($filePath)) return '';
+    
+    // Safety check: skip text extraction for files over 15MB to prevent PHP memory exhaustion
+    if (filesize($filePath) > 15 * 1024 * 1024) {
+        return ''; 
+    }
+
     $content = @file_get_contents($filePath);
     if (!$content) return '';
 
@@ -100,7 +127,7 @@ function lookupISBN(string $isbn): array {
 
     // Attempt 1: Google Books API
     $googleUrl = "https://www.googleapis.com/books/v1/volumes?q=isbn:" . urlencode($cleanIsbn);
-    $response = @file_get_contents($googleUrl);
+    $response = fetchUrl($googleUrl);
     if ($response) {
         $data = json_decode($response, true);
         if (!empty($data['items'][0]['volumeInfo'])) {
@@ -119,7 +146,7 @@ function lookupISBN(string $isbn): array {
 
     // Attempt 2: Open Library API Fallback
     $openLibUrl = "https://openlibrary.org/api/books?bibkeys=ISBN:" . urlencode($cleanIsbn) . "&jscmd=data&format=json";
-    $response = @file_get_contents($openLibUrl);
+    $response = fetchUrl($openLibUrl);
     if ($response) {
         $data = json_decode($response, true);
         $key = "ISBN:" . $cleanIsbn;
@@ -134,11 +161,11 @@ function lookupISBN(string $isbn): array {
             return [
                 'titre'     => $info['title'] ?? '',
                 'auteur'    => implode(', ', $authors),
-                'editeur'   => isset($info['publishers'][0]['name']) ?$info['publishers'][0]['name'] : '',
-                'annee'     => isset($info['publish_date']) ? (int)preg_replace('/[^0-9]/', '',$info['publish_date']) : null,
+                'editeur'   => isset($info['publishers'][0]['name']) ? $info['publishers'][0]['name'] : '',
+                'annee'     => isset($info['publish_date']) ? (int)preg_replace('/[^0-9]/', '', $info['publish_date']) : null,
                 'pages'     => $info['number_of_pages'] ?? null,
                 'resume'    => '',
-                'categorie' => isset($info['subjects'][0]['name']) ?$info['subjects'][0]['name'] : 'General'
+                'categorie' => isset($info['subjects'][0]['name']) ? $info['subjects'][0]['name'] : 'General'
             ];
         }
     }
@@ -151,42 +178,81 @@ function lookupISBN(string $isbn): array {
 // -----------------------------------------------------------------------------
 
 // API Endpoint: Async ISBN Lookup (AJAX)
-if (isset($_GET['action']) &&$_GET['action'] === 'lookup_isbn') {
+if (isset($_GET['action']) && $_GET['action'] === 'lookup_isbn') {
     header('Content-Type: application/json');
-    $isbn =$_GET['isbn'] ?? '';
+    $isbn = $_GET['isbn'] ?? '';
     $data = lookupISBN($isbn);
     echo json_encode($data);
     exit;
 }
 
 // Controller Action: Handle Book Upload (POST)
-$flashMessage = '';$flashType = '';
+$flashMessage = '';
+$flashType = '';
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_book'])) {$titre     = trim($_POST['titre'] ?? '');$auteur    = trim($_POST['auteur'] ?? '');$isbn      = trim($_POST['isbn'] ?? '');$cote      = trim($_POST['cote'] ?? '');$editeur   = trim($_POST['editeur'] ?? '');$annee     = !empty($_POST['annee']) ? (int)$_POST['annee'] : null;
-    $categorie = trim($_POST['categorie'] ?? 'General');$pages     = !empty($_POST['pages']) ? (int)$_POST['pages'] : null;
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_book'])) {
+    $titre     = trim($_POST['titre'] ?? '');
+    $auteur    = trim($_POST['auteur'] ?? '');
+    $isbn      = trim($_POST['isbn'] ?? '');
+    $cote      = trim($_POST['cote'] ?? '');
+    $editeur   = trim($_POST['editeur'] ?? '');
+    $annee     = !empty($_POST['annee']) ? (int)$_POST['annee'] : null;
+    $categorie = trim($_POST['categorie'] ?? 'General');
+    $pages     = !empty($_POST['pages']) ? (int)$_POST['pages'] : null;
     $resume    = trim($_POST['resume'] ?? '');
 
-    if (empty($titre) || empty($auteur) || !isset($_FILES['fichier']) || $_FILES['fichier']['error'] !== UPLOAD_ERR_OK) {$flashMessage = "Please complete all required fields and select a valid file.";
+    if (empty($titre) || empty($auteur) || !isset($_FILES['fichier'])) {
+        $flashMessage = "Please complete all required fields.";
+        $flashType = "error";
+    } elseif ($_FILES['fichier']['error'] !== UPLOAD_ERR_OK) {
+        switch ($_FILES['fichier']['error']) {
+            case UPLOAD_ERR_INI_SIZE:
+            case UPLOAD_ERR_FORM_SIZE:
+                $flashMessage = "The uploaded file exceeds the server maximum upload limit.";
+                break;
+            case UPLOAD_ERR_PARTIAL:
+                $flashMessage = "The file was only partially uploaded. Please try again.";
+                break;
+            case UPLOAD_ERR_NO_FILE:
+                $flashMessage = "No document file was selected.";
+                break;
+            default:
+                $flashMessage = "An unexpected file upload error occurred.";
+                break;
+        }
         $flashType = "error";
     } else {
-        $file = $_FILES['fichier'];$finfo = new finfo(FILEINFO_MIME_TYPE);
-        $mimeType =$finfo->file($file['tmp_name']);$extension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));$allowedExtensions = ['pdf', 'epub', 'mobi'];
+        $file = $_FILES['fichier'];
         
-        if (!in_array($extension, $allowedExtensions)) {$flashMessage = "Invalid file type. Only PDF, EPUB, and MOBI files are accepted.";
+        // Check MIME Type
+        $finfo = new finfo(FILEINFO_MIME_TYPE);
+        $mimeType = $finfo->file($file['tmp_name']);
+        
+        $extension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+        $allowedExtensions = ['pdf', 'epub', 'mobi'];
+        $allowedMimeTypes  = [
+            'application/pdf', 
+            'application/epub+zip', 
+            'application/x-mobipocket-ebook',
+            'application/octet-stream' // MOBI fallback
+        ];
+
+        if (!in_array($extension, $allowedExtensions) || !in_array($mimeType, $allowedMimeTypes)) {
+            $flashMessage = "Invalid or corrupted file type detected. Allowed formats: PDF, EPUB, MOBI.";
             $flashType = "error";
         } else {
             // Cryptographically secure filename generation
-            $newFileName = bin2hex(random_bytes(16)) . '.' .$extension;
-            $targetPath = UPLOAD_DIR .$newFileName;
+            $newFileName = bin2hex(random_bytes(16)) . '.' . $extension;
+            $targetPath = UPLOAD_DIR . $newFileName;
 
-            if (move_uploaded_file($file['tmp_name'],$targetPath)) {
+            if (move_uploaded_file($file['tmp_name'], $targetPath)) {
                 // Extract PDF full-text content if applicable
                 $extractedText = '';
                 if ($extension === 'pdf') {
                     $extractedText = extractTextFromPdf($targetPath);
                 }
 
-                $stmt =$pdo->prepare("
+                $stmt = $pdo->prepare("
                     INSERT INTO livres (titre, auteur, isbn, cote, editeur, annee, format, categorie, pages, resume, fichier, fulltext_content)
                     VALUES (:titre, :auteur, :isbn, :cote, :editeur, :annee, :format, :categorie, :pages, :resume, :fichier, :fulltext_content)
                 ");
@@ -225,7 +291,7 @@ $sql = "SELECT * FROM livres WHERE 1=1";
 $params = [];
 
 if (!empty($searchQuery)) {
-    // Attempt Full-Text Match query with fallback to LIKE operator
+    // Full-Text Search with Boolean Mode and LIKE fallback
     $sql .= " AND (
         MATCH(titre, auteur, resume, fulltext_content) AGAINST (:searchInBool IN BOOLEAN MODE)
         OR titre LIKE :searchLike 
@@ -250,7 +316,7 @@ $stmt = $pdo->prepare($sql);
 $stmt->execute($params);
 $books =$stmt->fetchAll();
 
-// Fetch filter values
+// Fetch filter categories and formats dynamically
 $categories =$pdo->query("SELECT DISTINCT categorie FROM livres WHERE categorie IS NOT NULL AND categorie != '' ORDER BY categorie ASC")->fetchAll(PDO::FETCH_COLUMN);
 $formats =$pdo->query("SELECT DISTINCT format FROM livres WHERE format IS NOT NULL AND format != '' ORDER BY format ASC")->fetchAll(PDO::FETCH_COLUMN);
 
@@ -563,7 +629,7 @@ $formats =$pdo->query("SELECT DISTINCT format FROM livres WHERE format IS NOT NU
             const epubContainer = document.getElementById('epub-viewer');
             const fallbackContainer = document.getElementById('fallback-view');
 
-            // Hide previous instances
+            // Reset modal states
             pdfIframe.classList.add('hidden');
             epubContainer.classList.add('hidden');
             fallbackContainer.classList.add('hidden');
