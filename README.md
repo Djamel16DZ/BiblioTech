@@ -27,11 +27,22 @@ Full-Text Content Indexing & Memory Safety
 
 Automatically extracts text content from uploaded PDF books for searchable catalog indexing.
 
-Enforces a 15 MB file size limit during text extraction to prevent PHP memory_limit exhaustion on large technical manuals.
+Enforces a 15 MB file size limit during text extraction to prevent memory_limit exhaustion on large technical manuals.
 
 Stores extracted content in the fulltext_content database field.
 
-Employs MySQL/MariaDB FULLTEXT search capabilities using IN BOOLEAN MODE, with LIKE fallbacks, across metadata and extracted book text.
+Employs MySQL/MariaDB FULLTEXT search capabilities using IN BOOLEAN MODE, with hardened LIKE fallback queries across metadata and extracted text.
+
+Hardened PDO Prepared Statements
+
+Explicitly uses unique named parameters (:l1, :l2, :l3, etc.) across multi-field search conditions to prevent:
+
+SQLSTATE[HY093]: Invalid parameter number
+
+
+This ensures compatibility when native prepared statements are enabled:
+
+PDO::ATTR_EMULATE_PREPARES => false
 
 Resilient ISBN Auto-Enrichment
 
@@ -51,11 +62,7 @@ Direct download fallback interface for MOBI formats.
 
 Hardened Security & Robust Upload Handling
 
-Strict dual-layer validation checks both:
-
-File extensions (.pdf, .epub, .mobi).
-
-MIME types via PHP finfo / the fileinfo extension.
+Strict dual-layer validation checks both file extensions (.pdf, .epub, .mobi) and MIME types via PHP finfo / fileinfo.
 
 Cryptographically secure filename generation using:
 
@@ -74,30 +81,27 @@ Collapsible side drawer for book submissions.
 
 Dynamic catalog filters for Category and Format.
 
-Full-text search bar.
+Search bar with multi-term token parsing.
 
 Requirements
-
-Before installing BiblioTech, make sure your environment meets the following requirements:
-
 Requirement	Version / Details
 PHP	8.0 or higher
 PHP Extensions	pdo_mysql, fileinfo, zip (for EPUB rendering), curl (recommended)
 Database	MariaDB 10.4+ or MySQL 8.0+ with InnoDB FULLTEXT support
-Web Server	Apache, Nginx, or PHP built-in development server
+Web Server	Apache, Nginx, Laragon, XAMPP, or PHP built-in development server
 Internet Access	Required for Tailwind CSS, Font Awesome, ePub.js CDN, and ISBN API lookups
 Database Configuration
 
-Database credentials are defined in the centralized configuration block at the top of index.php.
+Database credentials are defined in the centralized configuration block at the top of index.php:
 
 define('DB_HOST', 'localhost');
 define('DB_NAME', 'bibliotheque_db');
 define('DB_USER', 'root');
-define('DB_PASS', 'root');
+define('DB_PASS', '');
 define('DB_CHARSET', 'utf8mb4');
 
 
-Adjust these values according to your local environment.
+Note: Adjust these values according to your local environment setup.
 
 Database Schema
 
@@ -148,7 +152,7 @@ git clone https://github.com/YOUR_USERNAME/YOUR_REPOSITORY.git
 cd YOUR_REPOSITORY
 
 
-Or manually place index.php into your local web server root directory, such as:
+Or manually place index.php into your local web server root directory:
 
 htdocs for XAMPP
 
@@ -158,9 +162,7 @@ Your configured Apache/Nginx document root
 
 2. Create the Database
 
-Create a database matching the DB_NAME value configured in index.php.
-
-For example:
+Create a database matching the DB_NAME value configured in index.php:
 
 CREATE DATABASE bibliotheque_db
 CHARACTER SET utf8mb4
@@ -181,7 +183,7 @@ Then open:
 http://localhost:8000
 
 
-Alternatively, access the application through your local stack, such as XAMPP, Laragon, or another Apache/Nginx environment.
+Alternatively, access the application through your local web server stack, such as Laragon or XAMPP.
 
 4. Configure Directory Permissions
 
@@ -191,21 +193,17 @@ Make sure the following directory exists and is writable by the web server:
 
 uploads/books/
 
-
-Uploaded PDF, EPUB, and MOBI files will be stored in this directory.
-
 Application Structure
 BiblioTech/
-├── index.php              # Core application: configuration, logic, UI, and reader
+├── index.php              # Core application: configuration, auto-migrations,
+│                          # search logic, UI, and reader
 └── uploads/
     └── books/             # Secure storage for uploaded eBook files
 
-
-Note: The application intentionally uses a single-file architecture. This keeps the MVP lightweight and easy to deploy while concentrating the core application logic in index.php.
-
 Security & Reliability Hardening
+PDO Strict Compatibility
 
-BiblioTech implements several technical safeguards for files and server execution:
+Resolved SQLSTATE[HY093] by ensuring unique named parameter placeholders exist across all conditional query blocks when prepared statement emulation is disabled.
 
 Strict Dual Verification
 
@@ -234,7 +232,7 @@ Generates cryptographically secure filenames using:
 bin2hex(random_bytes(16))
 
 
-This prevents file overwrite collisions and helps prevent directory traversal attacks.
+This helps prevent directory traversal and file overwrite collisions.
 
 XSS & SQL Injection Prevention
 
@@ -243,9 +241,6 @@ Output escaping with htmlspecialchars().
 Prepared SQL statements using PDO.
 
 External Services & Libraries
-
-BiblioTech currently relies on the following external resources and libraries:
-
 Google Books API
 
 Used for ISBN-based book metadata enrichment.
@@ -260,13 +255,11 @@ Used for client-side EPUB parsing and dynamic in-browser rendering.
 
 Tailwind CSS
 
-Loaded through the Tailwind CSS CDN for the application interface.
+Loaded through the Tailwind CSS CDN for application styling.
 
 Font Awesome
 
-Used for interface icons.
-
-Note: Internet access is required when resources are loaded from CDNs or APIs. Core database operations and local file management operate offline once assets are loaded.
+Used for interface iconography.
 
 Roadmap
 
@@ -280,24 +273,12 @@ Roadmap
 
  Step 5: Full-Text Content Indexing & Client-Side EPUB Reader Integration (ePub.js)
 
- Hardening: Security audit, FULLTEXT index fix, MIME verification, memory safety caps, and cURL API fallbacks.
+ Hardening: Security audit, FULLTEXT query fixes, PDO parameter fix (HY093), MIME verification, memory safety caps, and cURL API fallbacks.
 
 Project Status
 
-Current status: Feature Complete / Production-Hardened MVP
+Current Status: Feature Complete / Production-Hardened MVP
 
-BiblioTech has fulfilled its core single-file MVP feature set, including:
+BiblioTech is in active maintenance.
 
-Digital library catalog management.
-
-Secure PDF, EPUB, and MOBI file handling with strict MIME verification.
-
-Memory-safe full-text content extraction and MySQL/MariaDB FULLTEXT indexing.
-
-Resilient ISBN-based metadata enrichment with cURL fallback.
-
-In-browser PDF viewing and client-side EPUB rendering with ePub.js.
-
-Responsive Tailwind CSS catalog interface.
-
-The project is now in active maintenance.
+All core feature deliverables, auto-migration handlers, search query edge cases, and in-browser reading integrations are fully implemented and verified.
