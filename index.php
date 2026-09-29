@@ -39,6 +39,7 @@ if (!extension_loaded('pdo_mysql')) {
             `title` VARCHAR(255) NOT NULL,
             `author` VARCHAR(255) DEFAULT NULL,
             `category` VARCHAR(100) DEFAULT 'Uncategorized',
+            `summary` TEXT DEFAULT NULL,
             `isbn` VARCHAR(30) DEFAULT NULL,
             `format` ENUM('physical', 'pdf', 'epub', 'mobi') DEFAULT 'physical',
             `pub_year` INT(4) DEFAULT NULL,
@@ -47,7 +48,7 @@ if (!extension_loaded('pdo_mysql')) {
             `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             INDEX `idx_format` (`format`),
             INDEX `idx_category` (`category`),
-            FULLTEXT INDEX `ft_catalog_search` (`title`, `author`, `cote`, `isbn`)
+            FULLTEXT INDEX `ft_catalog_search` (`title`, `author`, `cote`, `isbn`, `summary`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
 
     } catch (\PDOException $e) {
@@ -127,6 +128,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'lookup_isbn') {
         }
 
         $category = !empty($book['subjects']) ? $book['subjects'][0]['name'] : 'Uncategorized';
+        $summary = $book['notes'] ?? ($book['description'] ?? '');
 
         echo json_encode([
             'success'  => true,
@@ -134,6 +136,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'lookup_isbn') {
             'author'   => implode(', ', $authors),
             'pub_year' => $pubYear,
             'category' => $category,
+            'summary'  => is_array($summary) ? ($summary['value'] ?? '') : $summary,
             'isbn'     => $isbn
         ]);
     } else {
@@ -155,14 +158,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     try {
         $fileUrl = handleFileUpload();
 
-        $stmt = $pdo->prepare("INSERT INTO catalog (cote, title, author, category, isbn, format, pub_year, location, file_url) 
-                               VALUES (:cote, :title, :author, :category, :isbn, :format, :pub_year, :location, :file_url)");
+        $stmt = $pdo->prepare("INSERT INTO catalog (cote, title, author, category, summary, isbn, format, pub_year, location, file_url) 
+                               VALUES (:cote, :title, :author, :category, :summary, :isbn, :format, :pub_year, :location, :file_url)");
         
         $stmt->execute([
             ':cote'     => trim($_POST['cote']),
             ':title'    => trim($_POST['title']),
             ':author'   => trim($_POST['author']) ?: null,
             ':category' => trim($_POST['category']) ?: 'Uncategorized',
+            ':summary'  => trim($_POST['summary']) ?: null,
             ':isbn'     => trim($_POST['isbn']) ?: null,
             ':format'   => trim($_POST['format']) ?: 'physical',
             ':pub_year' => !empty($_POST['pub_year']) ? (int)$_POST['pub_year'] : null,
@@ -212,6 +216,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                                title = :title, 
                                author = :author, 
                                category = :category, 
+                               summary = :summary,
                                isbn = :isbn, 
                                format = :format, 
                                pub_year = :pub_year, 
@@ -225,6 +230,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             ':title'    => trim($_POST['title']),
             ':author'   => trim($_POST['author']) ?: null,
             ':category' => trim($_POST['category']) ?: 'Uncategorized',
+            ':summary'  => trim($_POST['summary']) ?: null,
             ':isbn'     => trim($_POST['isbn']) ?: null,
             ':format'   => trim($_POST['format']) ?: 'physical',
             ':pub_year' => !empty($_POST['pub_year']) ? (int)$_POST['pub_year'] : null,
@@ -340,13 +346,15 @@ if (!empty($search)) {
     $whereClauses[] = "(COALESCE(title, '') LIKE :s1 
                        OR COALESCE(author, '') LIKE :s2 
                        OR COALESCE(cote, '') LIKE :s3 
-                       OR COALESCE(isbn, '') LIKE :s4)";
+                       OR COALESCE(isbn, '') LIKE :s4
+                       OR COALESCE(summary, '') LIKE :s5)";
     
     $searchTerm = '%' . $search . '%';
     $params[':s1'] = $searchTerm;
     $params[':s2'] = $searchTerm;
     $params[':s3'] = $searchTerm;
     $params[':s4'] = $searchTerm;
+    $params[':s5'] = $searchTerm;
 }
 
 if ($format !== 'all' && !empty($format)) {
@@ -506,7 +514,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
 
                 <div class="relative flex-1">
                     <i class="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-zinc-500 text-xs"></i>
-                    <input type="text" id="searchInput" value="<?= htmlspecialchars($search) ?>" placeholder="Search title, author, ISBN, or Cote..." 
+                    <input type="text" id="searchInput" value="<?= htmlspecialchars($search) ?>" placeholder="Search title, author, ISBN, summary, or Cote..." 
                            oninput="triggerLiveSearch()"
                            class="w-full bg-zinc-950 border border-zinc-800 rounded-md pl-8 pr-3 py-1.5 text-xs text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-indigo-500 transition">
                 </div>
@@ -967,6 +975,11 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                         </div>
                     </div>
 
+                    <div>
+                        <label class="block text-zinc-400 mb-1">Book Summary / Abstract</label>
+                        <textarea name="summary" id="formSummary" rows="4" placeholder="Enter a comprehensive description or summary of the book..." class="w-full bg-zinc-950 border border-zinc-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500 resize-y"></textarea>
+                    </div>
+
                     <div class="grid grid-cols-3 gap-3">
                         <div>
                             <label class="block text-zinc-400 mb-1">ISBN</label>
@@ -1006,7 +1019,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
         let searchDebounceTimer = null;
         let currentCatalogRecords = <?= json_encode($records) ?>;
 
-        // Fonction helper JavaScript pour attribuer dynamiquement des couleurs variées aux badges de catégories
         function getCategoryBadgeStyle(category) {
             if (!category) category = 'Uncategorized';
             
@@ -1078,6 +1090,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
             document.getElementById('formTitle').value = row.title || '';
             document.getElementById('formAuthor').value = row.author || '';
             document.getElementById('formCategory').value = row.category || '';
+            document.getElementById('formSummary').value = row.summary || '';
             document.getElementById('formIsbn').value = row.isbn || '';
             document.getElementById('formPubYear').value = row.pub_year || '';
             document.getElementById('formLocation').value = row.location || '';
@@ -1254,6 +1267,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                     document.getElementById('formIsbn').value = res.isbn || isbn;
                     if (res.pub_year) document.getElementById('formPubYear').value = res.pub_year;
                     if (res.category) document.getElementById('formCategory').value = res.category;
+                    if (res.summary) document.getElementById('formSummary').value = res.summary;
 
                     if (!document.getElementById('formCote').value) {
                         const prefix = (res.title || 'LIB').substring(0, 3).toUpperCase();
