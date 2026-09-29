@@ -201,6 +201,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 
         $newUploadedFile = handleFileUpload();
         if ($newUploadedFile) {
+            if (!empty($fileUrl) && file_exists(__DIR__ . '/' . $fileUrl)) {
+                @unlink(__DIR__ . '/' . $fileUrl);
+            }
             $fileUrl = $newUploadedFile;
         }
 
@@ -253,6 +256,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
 
     try {
+        $stmtOld = $pdo->prepare("SELECT file_url FROM catalog WHERE id = :id");
+        $stmtOld->execute([':id' => $id]);
+        $row = $stmtOld->fetch();
+        if ($row && !empty($row['file_url']) && file_exists(__DIR__ . '/' . $row['file_url'])) {
+            @unlink(__DIR__ . '/' . $row['file_url']);
+        }
+
         $stmt = $pdo->prepare("DELETE FROM catalog WHERE id = :id");
         $stmt->execute([':id' => $id]);
 
@@ -264,7 +274,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 }
 
 // =========================================================================
-// 5. FETCH DASHBOARD & CATALOG METRICS (OVERKILL ANALYTICS)
+// 5. FETCH DASHBOARD & CATALOG METRICS
 // =========================================================================
 $totalRecords = 0;
 $countPhysical = 0;
@@ -307,14 +317,21 @@ $physicalPercentage = $totalRecords > 0 ? round(($countPhysical / $totalRecords)
 $attachmentRate = $totalDigital > 0 ? round(($filesAttachedCount / $totalDigital) * 100, 1) : 0;
 
 // =========================================================================
-// 6. QUERY & PAGINATION LOGIC (FOR AJAX CATALOGUE)
+// 6. QUERY & PAGINATION LOGIC
 // =========================================================================
 $search   = isset($_GET['q']) ? trim($_GET['q']) : '';
 $format   = isset($_GET['format']) ? trim($_GET['format']) : 'all';
 $category = isset($_GET['category']) ? trim($_GET['category']) : 'all';
-$page     = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
-$limit    = 50;
+$sort     = isset($_GET['sort']) ? trim($_GET['sort']) : 'id';
+$order    = isset($_GET['order']) && strtoupper($_GET['order']) === 'ASC' ? 'ASC' : 'DESC';
+$page     = isset($_GET['page']) ? max(1, (int) $_GET['page']) : 1;
+$limit    = 10;
 $offset   = ($page - 1) * $limit;
+
+$allowedSortColumns = ['cote', 'title', 'author', 'category', 'isbn', 'format', 'pub_year', 'id'];
+if (!in_array($sort, $allowedSortColumns)) {
+    $sort = 'id';
+}
 
 $whereClauses = [];
 $params       = [];
@@ -356,7 +373,7 @@ if ($pdo !== null) {
         $countStmt->execute();
         $filteredRecordsCount = (int)$countStmt->fetchColumn();
 
-        $sql = "SELECT * FROM catalog {$whereSql} ORDER BY id DESC LIMIT :limit OFFSET :offset";
+        $sql = "SELECT * FROM catalog {$whereSql} ORDER BY {$sort} {$order} LIMIT :limit OFFSET :offset";
         $stmt = $pdo->prepare($sql);
         foreach ($params as $key => $val) {
             $stmt->bindValue($key, $val, \PDO::PARAM_STR);
@@ -389,7 +406,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BiblioTech - Overkill LMS Command Center</title>
+    <title>BiblioTech - Library Management System</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -421,7 +438,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                     <a href="#dashboard" onclick="switchTab('dashboard')" id="nav-dashboard" class="nav-item flex items-center justify-between px-2.5 py-1.5 rounded-md bg-gradient-to-r from-indigo-600/20 to-purple-600/10 text-indigo-300 font-semibold border border-indigo-500/30 shadow-sm">
                         <div class="flex items-center space-x-2.5">
                             <i class="fa-solid fa-chart-pie w-4 text-center text-indigo-400"></i>
-                            <span>Dashboard Overkill</span>
+                            <span>Dashboard</span>
                         </div>
                         <span class="w-2 h-2 rounded-full bg-indigo-400 animate-ping"></span>
                     </a>
@@ -475,7 +492,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                 <span class="w-2 h-2 rounded-full <?= $pdo !== null && $db_error === null ? 'bg-emerald-500 shadow-lg shadow-emerald-500/50' : 'bg-rose-500' ?>"></span>
                 <span class="text-zinc-300">MariaDB v10.4+</span>
             </span>
-            <span class="text-indigo-400 font-bold">LMS v2.0</span>
+            <span class="text-indigo-400 font-bold">LMS v2.1</span>
         </div>
     </aside>
 
@@ -513,9 +530,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
 
         <div class="flex-1 flex overflow-hidden relative">
 
-            <!-- ========================================================= -->
-            <!-- VIEW: DASHBOARD (OVERKILL & COLORFUL) -->
-            <!-- ========================================================= -->
+            <!-- VIEW: DASHBOARD -->
             <div id="view-dashboard" class="absolute inset-0 overflow-y-auto p-6 space-y-6 bg-zinc-950">
                 <div class="flex justify-between items-center bg-gradient-to-r from-indigo-950/40 via-purple-950/20 to-zinc-900/60 p-5 rounded-xl border border-indigo-500/20 shadow-xl">
                     <div class="space-y-1">
@@ -524,7 +539,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                             <span class="text-zinc-400 text-[11px]"><i class="fa-regular fa-clock mr-1"></i><?= date('Y-m-d H:i') ?></span>
                         </div>
                         <h1 class="text-lg font-black text-white tracking-tight flex items-center space-x-2">
-                            <span>Bibliotech Command Center</span>
+                            <span>BiblioTech Dashboard</span>
                             <i class="fa-solid fa-shield-halved text-indigo-400 text-sm"></i>
                         </h1>
                         <p class="text-zinc-400 text-xs">Analyse globale, métriques de stockage, taux de numérisation et état de santé du catalogue.</p>
@@ -535,9 +550,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                     </button>
                 </div>
 
-                <!-- OVERKILL KPI CARDS GRID -->
+                <!-- KPI CARDS GRID -->
                 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                    <!-- Total Catalog -->
                     <div class="bg-gradient-to-br from-zinc-900 via-zinc-900 to-indigo-950/30 border border-indigo-500/30 rounded-xl p-4 flex flex-col justify-between shadow-lg relative overflow-hidden group hover:border-indigo-500/60 transition">
                         <div class="absolute -right-4 -bottom-4 w-24 h-24 bg-indigo-500/10 rounded-full blur-xl group-hover:bg-indigo-500/20 transition"></div>
                         <div class="flex items-center justify-between text-zinc-400 mb-2">
@@ -553,7 +567,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                         </div>
                     </div>
 
-                    <!-- Physical Holdings -->
                     <div class="bg-gradient-to-br from-zinc-900 via-zinc-900 to-amber-950/30 border border-amber-500/30 rounded-xl p-4 flex flex-col justify-between shadow-lg relative overflow-hidden group hover:border-amber-500/60 transition">
                         <div class="absolute -right-4 -bottom-4 w-24 h-24 bg-amber-500/10 rounded-full blur-xl group-hover:bg-amber-500/20 transition"></div>
                         <div class="flex items-center justify-between text-zinc-400 mb-2">
@@ -569,7 +582,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                         </div>
                     </div>
 
-                    <!-- Digital E-Books -->
                     <div class="bg-gradient-to-br from-zinc-900 via-zinc-900 to-sky-950/30 border border-sky-500/30 rounded-xl p-4 flex flex-col justify-between shadow-lg relative overflow-hidden group hover:border-sky-500/60 transition">
                         <div class="absolute -right-4 -bottom-4 w-24 h-24 bg-sky-500/10 rounded-full blur-xl group-hover:bg-sky-500/20 transition"></div>
                         <div class="flex items-center justify-between text-zinc-400 mb-2">
@@ -585,7 +597,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                         </div>
                     </div>
 
-                    <!-- Categories Count -->
                     <div class="bg-gradient-to-br from-zinc-900 via-zinc-900 to-emerald-950/30 border border-emerald-500/30 rounded-xl p-4 flex flex-col justify-between shadow-lg relative overflow-hidden group hover:border-emerald-500/60 transition">
                         <div class="absolute -right-4 -bottom-4 w-24 h-24 bg-emerald-500/10 rounded-full blur-xl group-hover:bg-emerald-500/20 transition"></div>
                         <div class="flex items-center justify-between text-zinc-400 mb-2">
@@ -602,10 +613,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                     </div>
                 </div>
 
-                <!-- SECONDARY METRICS & PROGRESS BARS SECTION -->
+                <!-- SECONDARY METRICS -->
                 <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    
-                    <!-- Format Breakdown Progress Bars -->
                     <div class="bg-zinc-900/80 border border-zinc-800 rounded-xl p-5 space-y-4 shadow-lg">
                         <div class="flex items-center justify-between pb-2 border-b border-zinc-800">
                             <h2 class="font-bold text-white text-xs flex items-center space-x-2">
@@ -658,7 +667,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                         </div>
                     </div>
 
-                    <!-- Digital Attachment Health Status -->
                     <div class="bg-zinc-900/80 border border-zinc-800 rounded-xl p-5 space-y-4 shadow-lg flex flex-col justify-between">
                         <div>
                             <div class="flex items-center justify-between pb-2 border-b border-zinc-800 mb-4">
@@ -694,7 +702,6 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                         </div>
                     </div>
 
-                    <!-- Top Categories Widget -->
                     <div class="bg-zinc-900/80 border border-zinc-800 rounded-xl p-5 space-y-4 shadow-lg">
                         <div class="flex items-center justify-between pb-2 border-b border-zinc-800">
                             <h2 class="font-bold text-white text-xs flex items-center space-x-2">
@@ -733,15 +740,15 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                     </div>
 
                     <div class="overflow-x-auto">
-                        <table class="w-full text-left border-collapse">
+                        <table class="w-full text-left border-collapse table-fixed">
                             <thead>
                                 <tr class="text-[10px] font-bold uppercase tracking-wider text-zinc-500 border-b border-zinc-800">
-                                    <th class="py-2 px-3 font-mono">Cote</th>
-                                    <th class="py-2 px-3">Title</th>
-                                    <th class="py-2 px-3">Author</th>
-                                    <th class="py-2 px-3">Category</th>
-                                    <th class="py-2 px-3 text-center">Format</th>
-                                    <th class="py-2 px-3 text-right font-mono">Year</th>
+                                    <th class="py-2 px-3 w-28 font-mono">Cote</th>
+                                    <th class="py-2 px-3 w-72">Title</th>
+                                    <th class="py-2 px-3 w-48">Author</th>
+                                    <th class="py-2 px-3 w-36">Category</th>
+                                    <th class="py-2 px-3 w-24 text-center">Format</th>
+                                    <th class="py-2 px-3 w-20 text-right font-mono">Year</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y divide-zinc-800/50 text-zinc-300">
@@ -751,20 +758,29 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                                 </tr>
                                 <?php else: ?>
                                     <?php foreach ($recentRecords as $row): ?>
+                                    <?php
+                                        $catName = $row['category'] ?? 'Uncategorized';
+                                        $palettesPhp = [
+                                            'bg-sky-500/10 text-sky-400 border-sky-500/20',
+                                            'bg-purple-500/10 text-purple-400 border-purple-500/20',
+                                            'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+                                            'bg-amber-500/10 text-amber-400 border-amber-500/20',
+                                            'bg-rose-500/10 text-rose-400 border-rose-500/20',
+                                            'bg-indigo-500/10 text-indigo-400 border-indigo-500/20',
+                                            'bg-teal-500/10 text-teal-400 border-teal-500/20',
+                                            'bg-fuchsia-500/10 text-fuchsia-400 border-fuchsia-500/20'
+                                        ];
+                                        $catClass = $palettesPhp[abs(crc32($catName)) % count($palettesPhp)];
+                                    ?>
                                     <tr class="hover:bg-zinc-900 transition">
-                                        <td class="py-2 px-3 font-mono text-zinc-400"><span class="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700"><?= htmlspecialchars($row['cote']) ?></span></td>
-                                        <td class="py-2 px-3 font-semibold text-white">
-                                            <?php if ($row['format'] !== 'physical' && !empty($row['file_url'])): ?>
-                                                <a href="<?= htmlspecialchars($row['file_url']) ?>" target="_blank" class="text-indigo-400 hover:underline flex items-center space-x-1">
-                                                    <i class="fa-solid fa-arrow-up-right-from-square text-[9px]"></i>
-                                                    <span><?= htmlspecialchars($row['title']) ?></span>
-                                                </a>
-                                            <?php else: ?>
-                                                <?= htmlspecialchars($row['title']) ?>
-                                            <?php endif; ?>
+                                        <td class="py-2 px-3 font-mono text-zinc-400 truncate" title="<?= htmlspecialchars($row['cote']) ?>"><span class="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700"><?= htmlspecialchars($row['cote']) ?></span></td>
+                                        <td class="py-2 px-3 font-semibold text-white truncate" title="<?= htmlspecialchars($row['title']) ?>">
+                                            <?= htmlspecialchars($row['title']) ?>
                                         </td>
-                                        <td class="py-2 px-3 text-zinc-400"><?= htmlspecialchars($row['author'] ?? 'N/A') ?></td>
-                                        <td class="py-2 px-3"><span class="px-2 py-0.5 rounded-full text-[10px] bg-sky-500/10 text-sky-400 border border-sky-500/20"><?= htmlspecialchars($row['category'] ?? 'Uncategorized') ?></span></td>
+                                        <td class="py-2 px-3 text-zinc-400 truncate" title="<?= htmlspecialchars($row['author'] ?? 'N/A') ?>"><?= htmlspecialchars($row['author'] ?? 'N/A') ?></td>
+                                        <td class="py-2 px-3 truncate" title="<?= htmlspecialchars($catName) ?>">
+                                            <span class="inline-block px-2 py-0.5 rounded-full text-[10px] border <?= $catClass ?> truncate"><?= htmlspecialchars($catName) ?></span>
+                                        </td>
                                         <td class="py-2 px-3 text-center"><span class="px-1.5 py-0.5 rounded text-[10px] <?= $row['format'] === 'physical' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20' ?>"><?= strtoupper($row['format']) ?></span></td>
                                         <td class="py-2 px-3 text-right font-mono text-zinc-400"><?= $row['pub_year'] ?? 'N/A' ?></td>
                                     </tr>
@@ -776,9 +792,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                 </div>
             </div>
 
-            <!-- ========================================================= -->
             <!-- VIEW: MASTER CATALOG -->
-            <!-- ========================================================= -->
             <div id="view-catalog" class="hidden absolute inset-0 flex flex-col min-w-0 bg-zinc-950">
                 <?php if ($db_error !== null): ?>
                 <div class="bg-rose-500/10 border-b border-rose-500/20 p-3 text-rose-400 text-xs flex items-start space-x-2 font-mono">
@@ -788,18 +802,32 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                 <?php endif; ?>
 
                 <div class="flex-1 overflow-auto">
-                    <table class="w-full text-left border-collapse font-sans">
+                    <table class="w-full text-left border-collapse font-sans table-fixed">
                         <thead class="bg-zinc-900/90 sticky top-0 border-b border-zinc-800 backdrop-blur z-10 text-[11px] font-semibold text-zinc-400">
                             <tr>
-                                <th class="py-2 px-3 w-10 text-center"><input type="checkbox" class="rounded border-zinc-800 bg-zinc-950 text-indigo-600"></th>
-                                <th class="py-2 px-3 w-28 font-mono">Cote</th>
-                                <th class="py-2 px-3">Title</th>
-                                <th class="py-2 px-3">Author(s)</th>
-                                <th class="py-2 px-3 w-36">Category</th>
-                                <th class="py-2 px-3 w-32 font-mono">ISBN</th>
-                                <th class="py-2 px-3 w-20 text-center">Format</th>
-                                <th class="py-2 px-3 w-16 text-right">Year</th>
-                                <th class="py-2 px-3 w-24 text-center">Actions</th>
+                                <th class="py-2 px-3 w-10 text-center"><input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll(this)" class="rounded border-zinc-800 bg-zinc-950 text-indigo-600"></th>
+                                <th class="py-2 px-3 w-28 font-mono cursor-pointer hover:text-white transition" onclick="sortCatalog('cote')">
+                                    Cote <i class="fa-solid fa-sort ml-1 text-[10px]"></i>
+                                </th>
+                                <th class="py-2 px-3 w-72 cursor-pointer hover:text-white transition" onclick="sortCatalog('title')">
+                                    Title <i class="fa-solid fa-sort ml-1 text-[10px]"></i>
+                                </th>
+                                <th class="py-2 px-3 w-48 cursor-pointer hover:text-white transition" onclick="sortCatalog('author')">
+                                    Author(s) <i class="fa-solid fa-sort ml-1 text-[10px]"></i>
+                                </th>
+                                <th class="py-2 px-3 w-36 cursor-pointer hover:text-white transition" onclick="sortCatalog('category')">
+                                    Category <i class="fa-solid fa-sort ml-1 text-[10px]"></i>
+                                </th>
+                                <th class="py-2 px-3 w-32 font-mono cursor-pointer hover:text-white transition" onclick="sortCatalog('isbn')">
+                                    ISBN <i class="fa-solid fa-sort ml-1 text-[10px]"></i>
+                                </th>
+                                <th class="py-2 px-3 w-20 text-center cursor-pointer hover:text-white transition" onclick="sortCatalog('format')">
+                                    Format <i class="fa-solid fa-sort ml-1 text-[10px]"></i>
+                                </th>
+                                <th class="py-2 px-3 w-16 text-right font-mono cursor-pointer hover:text-white transition" onclick="sortCatalog('pub_year')">
+                                    Year <i class="fa-solid fa-sort ml-1 text-[10px]"></i>
+                                </th>
+                                <th class="py-2 px-3 w-28 text-center">Actions</th>
                             </tr>
                         </thead>
                         <tbody id="catalogTableBody" class="divide-y divide-zinc-800/60 font-normal text-zinc-300">
@@ -808,27 +836,45 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                                 <td colspan="9" class="py-8 text-center text-zinc-500 italic">No entries found in catalog.</td>
                             </tr>
                             <?php else: ?>
-                                <?php foreach ($records as $row): ?>
+                                <?php $index = 0; foreach ($records as $row): ?>
+                                <?php
+                                    $catName = $row['category'] ?? 'Uncategorized';
+                                    $palettesPhp = [
+                                        'bg-sky-500/10 text-sky-400 border-sky-500/20',
+                                        'bg-purple-500/10 text-purple-400 border-purple-500/20',
+                                        'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+                                        'bg-amber-500/10 text-amber-400 border-amber-500/20',
+                                        'bg-rose-500/10 text-rose-400 border-rose-500/20',
+                                        'bg-indigo-500/10 text-indigo-400 border-indigo-500/20',
+                                        'bg-teal-500/10 text-teal-400 border-teal-500/20',
+                                        'bg-fuchsia-500/10 text-fuchsia-400 border-fuchsia-500/20'
+                                    ];
+                                    $catClass = $palettesPhp[abs(crc32($catName)) % count($palettesPhp)];
+                                ?>
                                 <tr class="hover:bg-zinc-900/60 transition group">
-                                    <td class="py-2 px-3 text-center"><input type="checkbox" class="rounded border-zinc-800 bg-zinc-950 text-indigo-600"></td>
-                                    <td class="py-2 px-3 font-mono text-zinc-400 text-[11px]"><span class="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700/50"><?= htmlspecialchars($row['cote']) ?></span></td>
-                                    <td class="py-2 px-3 font-semibold text-zinc-100 group-hover:text-indigo-400 transition">
-                                        <?php if ($row['format'] !== 'physical' && !empty($row['file_url'])): ?>
-                                            <a href="<?= htmlspecialchars($row['file_url']) ?>" target="_blank" class="hover:underline flex items-center space-x-1.5 text-indigo-400" title="Ouvrir le fichier e-book">
-                                                <i class="fa-solid fa-arrow-up-right-from-square text-[10px]"></i>
-                                                <span><?= htmlspecialchars($row['title']) ?></span>
-                                            </a>
-                                        <?php else: ?>
-                                            <?= htmlspecialchars($row['title']) ?>
-                                        <?php endif; ?>
+                                    <td class="py-2 px-3 text-center"><input type="checkbox" name="row_select" value="<?= $row['id'] ?>" class="row-checkbox rounded border-zinc-800 bg-zinc-950 text-indigo-600"></td>
+                                    <td class="py-2 px-3 font-mono text-zinc-400 text-[11px] truncate" title="<?= htmlspecialchars($row['cote']) ?>"><span class="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700/50"><?= htmlspecialchars($row['cote']) ?></span></td>
+                                    <td class="py-2 px-3 font-semibold text-zinc-100 truncate" title="<?= htmlspecialchars($row['title']) ?>">
+                                        <?= htmlspecialchars($row['title']) ?>
                                     </td>
-                                    <td class="py-2 px-3 text-zinc-400"><?= htmlspecialchars($row['author'] ?? 'N/A') ?></td>
-                                    <td class="py-2 px-3"><span class="inline-block px-2 py-0.5 rounded-full text-[10px] bg-sky-500/10 text-sky-400 border border-sky-500/20 truncate"><?= htmlspecialchars($row['category'] ?? 'Uncategorized') ?></span></td>
-                                    <td class="py-2 px-3 font-mono text-zinc-400 text-[11px]"><?= htmlspecialchars($row['isbn'] ?? 'N/A') ?></td>
+                                    <td class="py-2 px-3 text-zinc-400 truncate" title="<?= htmlspecialchars($row['author'] ?? 'N/A') ?>"><?= htmlspecialchars($row['author'] ?? 'N/A') ?></td>
+                                    <td class="py-2 px-3 truncate" title="<?= htmlspecialchars($catName) ?>">
+                                        <span class="inline-block px-2 py-0.5 rounded-full text-[10px] border <?= $catClass ?> truncate"><?= htmlspecialchars($catName) ?></span>
+                                    </td>
+                                    <td class="py-2 px-3 font-mono text-zinc-400 text-[11px] truncate" title="<?= htmlspecialchars($row['isbn'] ?? 'N/A') ?>"><?= htmlspecialchars($row['isbn'] ?? 'N/A') ?></td>
                                     <td class="py-2 px-3 text-center"><span class="px-1.5 py-0.5 rounded text-[10px] <?= $row['format'] === 'physical' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20' ?>"><?= strtoupper($row['format']) ?></span></td>
                                     <td class="py-2 px-3 text-right font-mono text-zinc-400"><?= $row['pub_year'] ?></td>
                                     <td class="py-2 px-3 text-center space-x-1">
-                                        <button onclick='editItem(<?= json_encode($row) ?>)' class="p-1 text-zinc-500 hover:text-indigo-400 transition" title="Edit Entry">
+                                        <?php if (!empty($row['file_url'])): ?>
+                                            <a href="<?= htmlspecialchars($row['file_url']) ?>" target="_blank" class="inline-block p-1 text-sky-400 hover:text-sky-300 bg-sky-500/10 hover:bg-sky-500/20 rounded border border-sky-500/30 transition" title="Ouvrir / Télécharger le fichier e-book">
+                                                <i class="fa-solid fa-file-arrow-down text-xs"></i>
+                                            </a>
+                                        <?php else: ?>
+                                            <span class="inline-block p-1 text-zinc-700 cursor-not-allowed" title="Aucun fichier associé">
+                                                <i class="fa-solid fa-file-circle-xmark text-xs"></i>
+                                            </span>
+                                        <?php endif; ?>
+                                        <button onclick="editItemByIndex(<?= $index ?>)" class="p-1 text-zinc-500 hover:text-indigo-400 transition" title="Edit Entry">
                                             <i class="fa-solid fa-pen-to-square text-xs"></i>
                                         </button>
                                         <button onclick="deleteItem(<?= $row['id'] ?>)" class="p-1 text-zinc-500 hover:text-rose-400 transition" title="Delete Entry">
@@ -836,7 +882,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                                         </button>
                                     </td>
                                 </tr>
-                                <?php endforeach; ?>
+                                <?php $index++; endforeach; ?>
                             <?php endif; ?>
                         </tbody>
                     </table>
@@ -848,7 +894,13 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
                     </div>
                     <div class="flex items-center space-x-2">
                         <button id="prevBtn" onclick="changePage(currentPage - 1)" <?= $page <= 1 ? 'disabled' : '' ?> class="px-2 py-1 bg-zinc-800 rounded hover:bg-zinc-700 disabled:opacity-40 text-zinc-300 transition">Previous</button>
-                        <span>Page <strong id="currentPageDisplay" class="text-zinc-200"><?= $page ?></strong> of <span id="totalPagesDisplay"><?= $totalPages ?></span></span>
+                        
+                        <div class="flex items-center space-x-1.5">
+                            <span>Page</span>
+                            <input type="number" id="pageInput" min="1" max="<?= $totalPages ?>" value="<?= $page ?>" onchange="jumpToPage(this.value)" class="w-12 bg-zinc-950 border border-zinc-800 rounded px-1.5 py-0.5 text-center text-zinc-200 font-mono text-xs focus:outline-none focus:border-indigo-500">
+                            <span>of <span id="totalPagesDisplay"><?= $totalPages ?></span></span>
+                        </div>
+
                         <button id="nextBtn" onclick="changePage(currentPage + 1)" <?= $page >= $totalPages ? 'disabled' : '' ?> class="px-2 py-1 bg-zinc-800 rounded hover:bg-zinc-700 disabled:opacity-40 text-zinc-300 transition">Next</button>
                     </div>
                 </footer>
@@ -856,7 +908,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
         </div>
     </main>
 
-    <!-- ADD / EDIT ITEM & ISBN LOOKUP MODAL -->
+    <!-- ADD / EDIT ITEM MODAL -->
     <div id="itemModal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
         <div class="bg-zinc-900 border border-zinc-800 w-full max-w-lg rounded-lg shadow-2xl flex flex-col overflow-hidden">
             <div class="px-4 py-3 border-b border-zinc-800 flex justify-between items-center bg-zinc-900/80">
@@ -949,7 +1001,33 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
     <script>
         let currentPage = <?= $page ?>;
         let totalPages = <?= $totalPages ?>;
+        let currentSort = '<?= $sort ?>';
+        let currentOrder = '<?= $order ?>';
         let searchDebounceTimer = null;
+        let currentCatalogRecords = <?= json_encode($records) ?>;
+
+        // Fonction helper JavaScript pour attribuer dynamiquement des couleurs variées aux badges de catégories
+        function getCategoryBadgeStyle(category) {
+            if (!category) category = 'Uncategorized';
+            
+            const palettes = [
+                'bg-sky-500/10 text-sky-400 border-sky-500/20',
+                'bg-purple-500/10 text-purple-400 border-purple-500/20',
+                'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+                'bg-amber-500/10 text-amber-400 border-amber-500/20',
+                'bg-rose-500/10 text-rose-400 border-rose-500/20',
+                'bg-indigo-500/10 text-indigo-400 border-indigo-500/20',
+                'bg-teal-500/10 text-teal-400 border-teal-500/20',
+                'bg-fuchsia-500/10 text-fuchsia-400 border-fuchsia-500/20'
+            ];
+            
+            let hash = 0;
+            for (let i = 0; i < category.length; i++) {
+                hash = category.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            const index = Math.abs(hash) % palettes.length;
+            return palettes[index];
+        }
 
         function toggleSidebar() {
             document.getElementById('sidebar').classList.toggle('collapsed');
@@ -978,6 +1056,11 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
             }
         }
 
+        function toggleSelectAll(source) {
+            const checkboxes = document.querySelectorAll('.row-checkbox');
+            checkboxes.forEach(cb => cb.checked = source.checked);
+        }
+
         function openItemModal() {
             document.getElementById('formItemId').value = '';
             document.getElementById('addItemForm').reset();
@@ -1000,7 +1083,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
             document.getElementById('formLocation').value = row.location || '';
             
             if (row.file_url) {
-                document.getElementById('currentFileIndicator').innerHTML = `Fichier actuel : <a href="${row.file_url}" target="_blank" class="text-indigo-400 underline">${row.file_url}</a>`;
+                document.getElementById('currentFileIndicator').innerHTML = `Fichier actuel : <a href="${escapeHtml(row.file_url)}" target="_blank" class="text-indigo-400 underline">${escapeHtml(row.file_url)}</a>`;
             } else {
                 document.getElementById('currentFileIndicator').innerText = 'Aucun fichier associé.';
             }
@@ -1009,6 +1092,13 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
             document.getElementById('formSubmitBtn').innerText = 'Update Catalog Entry';
             document.getElementById('isbnSection').style.display = 'none'; 
             document.getElementById('itemModal').classList.remove('hidden');
+        }
+
+        function editItemByIndex(index) {
+            const row = currentCatalogRecords[index];
+            if (row) {
+                editItem(row);
+            }
         }
 
         function closeItemModal() {
@@ -1024,10 +1114,29 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
             }, 200);
         }
 
+        function sortCatalog(column) {
+            if (currentSort === column) {
+                currentOrder = currentOrder === 'ASC' ? 'DESC' : 'ASC';
+            } else {
+                currentSort = column;
+                currentOrder = 'ASC';
+            }
+            currentPage = 1;
+            fetchCatalogData();
+        }
+
         function changePage(newPage) {
             if (newPage < 1 || newPage > totalPages) return;
             currentPage = newPage;
             fetchCatalogData();
+        }
+
+        function jumpToPage(val) {
+            let pageNum = parseInt(val);
+            if (isNaN(pageNum)) return;
+            if (pageNum < 1) pageNum = 1;
+            if (pageNum > totalPages) pageNum = totalPages;
+            changePage(pageNum);
         }
 
         function filterByFormat(fmt) {
@@ -1039,7 +1148,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
         function fetchCatalogData() {
             const q = document.getElementById('searchInput').value;
             const format = document.getElementById('formatFilter').value;
-            const url = `index.php?ajax=1&q=${encodeURIComponent(q)}&format=${encodeURIComponent(format)}&page=${currentPage}`;
+            const url = `index.php?ajax=1&q=${encodeURIComponent(q)}&format=${encodeURIComponent(format)}&sort=${encodeURIComponent(currentSort)}&order=${encodeURIComponent(currentOrder)}&page=${currentPage}`;
 
             fetch(url)
                 .then(res => res.json())
@@ -1051,31 +1160,43 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
         }
 
         function renderTableRows(records) {
+            currentCatalogRecords = records || [];
             const tbody = document.getElementById('catalogTableBody');
+            const selectAllCb = document.getElementById('selectAllCheckbox');
+            if (selectAllCb) selectAllCb.checked = false;
+
             if (!records || records.length === 0) {
                 tbody.innerHTML = `<tr><td colspan="9" class="py-8 text-center text-zinc-500 italic">No entries found matching current query filters.</td></tr>`;
                 return;
             }
 
-            tbody.innerHTML = records.map(row => `
+            tbody.innerHTML = records.map((row, index) => `
                 <tr class="hover:bg-zinc-900/65 transition group">
-                    <td class="py-2 px-3 text-center"><input type="checkbox" class="rounded border-zinc-800 bg-zinc-950 text-indigo-600"></td>
-                    <td class="py-2 px-3 font-mono text-zinc-400 text-[11px]"><span class="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700/50">${escapeHtml(row.cote || '')}</span></td>
-                    <td class="py-2 px-3 font-semibold text-zinc-100 group-hover:text-indigo-400 transition">
-                        ${(row.format !== 'physical' && row.file_url) ? `
-                            <a href="${escapeHtml(row.file_url)}" target="_blank" class="hover:underline flex items-center space-x-1.5 text-indigo-400" title="Ouvrir le fichier e-book">
-                                <i class="fa-solid fa-arrow-up-right-from-square text-[10px]"></i>
-                                <span>${escapeHtml(row.title || '')}</span>
-                            </a>
-                        ` : escapeHtml(row.title || '')}
+                    <td class="py-2 px-3 text-center"><input type="checkbox" name="row_select" value="${row.id}" class="row-checkbox rounded border-zinc-800 bg-zinc-950 text-indigo-600"></td>
+                    <td class="py-2 px-3 font-mono text-zinc-400 text-[11px] truncate" title="${escapeHtml(row.cote || '')}"><span class="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700/50">${escapeHtml(row.cote || '')}</span></td>
+                    <td class="py-2 px-3 font-semibold text-zinc-100 truncate" title="${escapeHtml(row.title || '')}">
+                        ${escapeHtml(row.title || '')}
                     </td>
-                    <td class="py-2 px-3 text-zinc-400">${escapeHtml(row.author || 'N/A')}</td>
-                    <td class="py-2 px-3"><span class="inline-block px-2 py-0.5 rounded-full text-[10px] bg-sky-500/10 text-sky-400 border border-sky-500/20 truncate">${escapeHtml(row.category || 'Uncategorized')}</span></td>
-                    <td class="py-2 px-3 font-mono text-zinc-400 text-[11px]">${escapeHtml(row.isbn || 'N/A')}</td>
+                    <td class="py-2 px-3 text-zinc-400 truncate" title="${escapeHtml(row.author || 'N/A')}">${escapeHtml(row.author || 'N/A')}</td>
+                    <td class="py-2 px-3 truncate" title="${escapeHtml(row.category || 'Uncategorized')}">
+                        <span class="inline-block px-2 py-0.5 rounded-full text-[10px] border ${getCategoryBadgeStyle(row.category)} truncate">
+                            ${escapeHtml(row.category || 'Uncategorized')}
+                        </span>
+                    </td>
+                    <td class="py-2 px-3 font-mono text-zinc-400 text-[11px] truncate" title="${escapeHtml(row.isbn || 'N/A')}">${escapeHtml(row.isbn || 'N/A')}</td>
                     <td class="py-2 px-3 text-center"><span class="px-1.5 py-0.5 rounded text-[10px] ${row.format === 'physical' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'}">${(row.format || 'physical').toUpperCase()}</span></td>
                     <td class="py-2 px-3 text-right font-mono text-zinc-400">${row.pub_year || 'N/A'}</td>
                     <td class="py-2 px-3 text-center space-x-1">
-                        <button onclick='editItem(${JSON.stringify(row)})' class="p-1 text-zinc-500 hover:text-indigo-400 transition" title="Edit Entry">
+                        ${row.file_url ? `
+                            <a href="${escapeHtml(row.file_url)}" target="_blank" class="inline-block p-1 text-sky-400 hover:text-sky-300 bg-sky-500/10 hover:bg-sky-500/20 rounded border border-sky-500/30 transition" title="Ouvrir / Télécharger le fichier e-book">
+                                <i class="fa-solid fa-file-arrow-down text-xs"></i>
+                            </a>
+                        ` : `
+                            <span class="inline-block p-1 text-zinc-700 cursor-not-allowed" title="Aucun fichier associé">
+                                <i class="fa-solid fa-file-circle-xmark text-xs"></i>
+                            </span>
+                        `}
+                        <button onclick="editItemByIndex(${index})" class="p-1 text-zinc-500 hover:text-indigo-400 transition" title="Edit Entry">
                             <i class="fa-solid fa-pen-to-square text-xs"></i>
                         </button>
                         <button onclick="deleteItem(${row.id})" class="p-1 text-zinc-500 hover:text-rose-400 transition" title="Delete Entry">
@@ -1089,13 +1210,18 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1') {
         function updatePaginationUI(total, page, totalP) {
             currentPage = page;
             totalPages = totalP;
-            const limit = 50;
+            const limit = 10;
             const start = total > 0 ? ((page - 1) * limit) + 1 : 0;
             const end = Math.min(page * limit, total);
 
             document.getElementById('paginationSummary').innerHTML = `Showing <strong class="text-zinc-200">${start} - ${end}</strong> of <strong class="text-zinc-200">${total.toLocaleString()}</strong> catalog entries`;
             document.getElementById('sidebar-total-badge').innerText = total.toLocaleString();
-            document.getElementById('currentPageDisplay').innerText = page;
+            
+            const pageInput = document.getElementById('pageInput');
+            if (pageInput) {
+                pageInput.value = page;
+                pageInput.max = totalPages;
+            }
             document.getElementById('totalPagesDisplay').innerText = totalPages;
 
             document.getElementById('prevBtn').disabled = (page <= 1);
